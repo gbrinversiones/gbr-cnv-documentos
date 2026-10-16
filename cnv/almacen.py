@@ -4,6 +4,8 @@ Estructura del bucket:
   cnv/texto/{cuit}/{doc_id}.txt.gz      texto completo del documento (con marcas [pagina N])
   cnv/indice/{cuit}.json                metadatos de todos los documentos de la empresa
   cnv/indice/global.json.gz             metadatos de todas las empresas (lo que busca el explorador)
+  cnv/financieros/{cuit}.json           cifras clave por periodo, con cita textual (ver cnv/financieros.py)
+  cnv/indice/financieros.json.gz        tabla plana empresa/periodo/cifras
 """
 import gzip
 import json

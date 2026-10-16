@@ -68,3 +68,8 @@ jobs:
       - run: pip install -r requirements.txt
       - name: Reconstruir el indice global
         run: python -m cnv indice
+      - name: Extraer cifras de estados contables (Claude Haiku, max 150 documentos)
+        continue-on-error: true
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: python -m cnv financieros --max 150 --tiempo-max 1200

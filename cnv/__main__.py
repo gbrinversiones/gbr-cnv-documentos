@@ -1,13 +1,17 @@
 """Linea de comandos:
   python -m cnv sync [--desde 2023-01-01] [--tipos hechos,estados_contables] [--fragmento 0/4] [--tiempo-max 18000] [--max-docs N] [--solo CUIT]
   python -m cnv indice
+  python -m cnv financieros [--max 150] [--solo CUIT] [--tiempo-max 1200]
 """
 import argparse
 import datetime as dt
 import sys
 import time
 
+import os
+
 from . import almacen as alm
+from . import financieros as fin
 from .sincronizar import TIPOS_DEFECTO, cargar_universo, construir_indice_global, sincronizar_empresa
 
 
@@ -23,12 +27,29 @@ def main(argv=None) -> int:
     s.add_argument("--solo", default=None, help="CUIT: procesa solo esa empresa")
     s.add_argument("--trabajadores", type=int, default=3)
     sub.add_parser("indice")
+    f = sub.add_parser("financieros")
+    f.add_argument("--max", type=int, default=150, help="maximo de documentos enviados al modelo por corrida (controla el costo)")
+    f.add_argument("--solo", default=None, help="CUIT: procesa solo esa empresa")
+    f.add_argument("--tiempo-max", type=int, default=1200, help="segundos; corta limpio y deja el resto para la proxima corrida")
     a = p.parse_args(argv)
 
     almacen = alm.almacen_desde_entorno()
     universo = cargar_universo()
     if a.cmd == "indice":
         print(f"indice global: {construir_indice_global(almacen, universo)} documentos")
+        return 0
+
+    if a.cmd == "financieros":
+        if not os.environ.get("ANTHROPIC_API_KEY"):
+            print("falta ANTHROPIC_API_KEY")
+            return 2
+        import anthropic
+
+        empresas = [e for e in universo if not a.solo or e["cuit"] == a.solo.replace("-", "")]
+        cliente = anthropic.Anthropic(timeout=120.0)
+        total = fin.ejecutar(almacen, empresas, cliente, a.max, time.monotonic() + a.tiempo_max)
+        print("TOTAL", total)
+        print(f"indice financieros: {fin.construir_indice_financieros(almacen, universo)} periodos")
         return 0
 
     i, n = (int(x) for x in a.fragmento.split("/"))
