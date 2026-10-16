@@ -9,7 +9,6 @@ Estructura en el almacen:
   cnv/indice/financieros.json.gz    tabla plana empresa/periodo/cifras para busqueda
 """
 import datetime as dt
-import gzip
 import json
 import re
 import time
@@ -437,7 +436,7 @@ def construir_indice_financieros(almacen, empresas: list) -> int:
             fila.update({c: p["cifras"][c]["valor"] if c in p["cifras"] else None for c in CAMPOS})
             filas.append(fila)
     filas.sort(key=lambda f: (f["periodo"], f["cuit"]), reverse=True)
-    almacen.guardar("cnv/indice/financieros.json.gz", gzip.compress(json.dumps(filas, ensure_ascii=False, separators=(",", ":")).encode("utf-8")))
+    alm.guardar_si_cambio(almacen, "cnv/indice/financieros.json.gz", alm.comprimir(json.dumps(filas, ensure_ascii=False, separators=(",", ":")).encode("utf-8")))
     return len(filas)
 
 
