@@ -14,6 +14,7 @@ Descarga los documentos **públicos** que las empresas argentinas presentan en l
 - `python -m cnv ocr`: OCR opcional de los PDF escaneados (ver abajo).
 - `python -m cnv clasificar`: asigna una categoría cerrada (`k`) a cada hecho relevante (ver abajo).
 - `python -m cnv novedades`: documentos nuevos entre corridas y lo presentado en los últimos 7 días, para la landing (sin modelo; ver abajo).
+- `python -m cnv cobertura`: cruza emisores y ONs con documentos y datos verificados; lista los huecos (sin modelo; ver abajo).
 - `python -m cnv ratios`: ratios por emisor y periodo desde las cifras verificadas (sin modelo; ver abajo).
 - `python -m cnv avisos-pago`: estructura los avisos de pago de ONs ya descargados (ver abajo).
 - El workflow `Sincronizar documentos CNV` corre todos los días (y se puede disparar a mano para cargas grandes).
@@ -61,6 +62,12 @@ python -m cnv financieros --max 20 --solo 30546689979 --tiempo-max 600
 - **Formato de `novedades.json`:** `{"version":1,"al","desde","dias","resumen":{hechos, hechos_por_categoria, avisos_pago, pagos_estructurados, nuevos_en_esta_corrida},"hechos_por_categoria":{categoria:[{cuit, empresa, doc, fecha, titulo, resumen, url, categoria, detectado, texto_ok}]},"avisos_pago":[{cuit, empresa, doc, fecha_presentacion, estructurado, fecha_pago, tipo_pago, clase, ticker, monto_total, moneda, url, detectado}]}`. Categorías: las de la lista cerrada de la clasificación más `sin_clasificar` (sin `k` todavía o categoría fuera de la lista). Orden: más nuevo primero. Un hecho cuyo texto no se pudo bajar igual aparece (con el título de la CNV; `texto_ok: false`).
 - **Avisos de pago:** una fila por pago estructurado (con los datos verificados de `cnv/avisos_pago`); si el aviso todavía no se estructuró, una fila con `estructurado: false`. `detectado` permite a la landing resaltar lo de hoy (presentado hace 3 días y detectado hoy es una novedad de hoy). `nuevos_en_esta_corrida` cuenta lo detectado en esa ejecución.
 - No se vuelve a escribir ningún archivo si el contenido es igual (`al` cambia cada día, así que `novedades.json` sí se actualiza diariamente).
+## Cobertura por emisor y ON (`cnv/cobertura.py`)
+`python -m cnv cobertura [--ons data/ons.csv] [--hoy AAAA-MM-DD]` cruza `data/universo.csv` y `data/ons.csv` con lo que ya hay en el bucket (sin modelo, sin red, US$ 0) y escribe `cnv/indice/cobertura.json.gz`. Corre en el job `indice`, después de `avisos-pago` y antes de `salud`.
+- **`data/ons.csv`** (`ticker, emisor, descripcion, vence, cuit, fuente_cuit`): una fila por ON de renta fija, con el CUIT de su emisor. Se armó a partir del catálogo de ONs de `portfolio-manager` (`data/ons_catalogo.csv` y `prospectos_por_on.csv`; solo datos públicos: ticker, descripción y vencimiento, sin precios). El CUIT sale de una coincidencia **exacta** de nombre con `universo.csv` (o con `cnv_cuits_emisores.csv`), y las 7 filas restantes se resolvieron a mano donde coincidían las dos fuentes (`fuente_cuit` lo dice). No hay coincidencia aproximada en tiempo de ejecución. Para sumar una ON, agregar la fila con su CUIT; un test exige que todos los CUIT sean válidos y estén en el universo.
+- **Formato:** `{"version":1,"al":"AAAA-MM-DD","huecos_definicion":{...},"resumen":{...},"emisores":[...],"ons_sin_emisor":[...]}`. Cada emisor (todas las empresas del universo, por nombre): `cuit`, `empresa`, `ons` (`ticker`, `vence`, `ultimo_pago` = última fecha de pago estructurada para ese ticker), `documentos` (por tipo: `total`, `con_texto`, `ultimo`), `ultimo_estado_contable` (`doc`, `periodo`, `tipo`, `balance`, `fecha_presentacion`, `cifras`; solo con cifras verificadas), `ultimo_aviso_pago` (el último estructurado, o el último documento con `estructurado: false`) y `huecos`.
+- **Huecos** (avisos accionables, no errores): `sin_documentos`, `sin_estados_contables`, `estados_contables_sin_cifras`, `estado_contable_desactualizado` (cierre de hace más de 200 días), `sin_prospectos` y `sin_avisos_de_pago` (solo si el emisor tiene ONs), `avisos_de_pago_sin_estructurar`, `documentos_fallidos`, `documentos_sin_bajar`, `sin_actividad_reciente` (más de 120 días). `ons_sin_emisor`: ONs cuyo CUIT falta (`sin_cuit_en_ons_csv`) o cuyo emisor no está en el universo (`emisor_fuera_del_universo`, o sea que no se están bajando sus documentos).
+- Depende de la fecha (`al`) para los huecos por antigüedad, así que el archivo puede cambiar de un día para otro aunque no haya documentos nuevos; no se vuelve a escribir si el contenido es igual.
 
 ## Ratios por emisor (`cnv/ratios.py`)
 `python -m cnv ratios` calcula, por emisor y periodo, a partir de las cifras **ya verificadas** de `cnv/financieros/{cuit}.json` (no usa el modelo, cuesta US$ 0) y escribe `cnv/indice/ratios.json.gz`.
@@ -182,6 +189,8 @@ Una fila por empresa/periodo/tipo/acumulado/balance: `cuit, empresa, periodo, ti
 
 ### `cnv/indice/novedades.json` y `cnv/indice/vistos.json`
 Ver «Novedades». `vistos.json` es estado interno entre corridas (no lo lee la landing).
+### `cnv/indice/cobertura.json.gz`
+Ver «Cobertura por emisor y ON».
 
 ### `cnv/indice/ratios.json.gz`
 Ver «Ratios por emisor». Un objeto por cuit con la lista de periodos; cada ratio es un número o `null` con su motivo.

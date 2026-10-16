@@ -129,6 +129,9 @@ jobs:
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: python -m cnv avisos-pago --max 200 --tiempo-max 900
+      - name: Cobertura de emisores y ONs (sin modelo)
+        continue-on-error: true
+        run: python -m cnv cobertura
       - name: Salud de la base (resumen del job)
         if: always()
         continue-on-error: true
