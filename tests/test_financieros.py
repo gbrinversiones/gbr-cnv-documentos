@@ -63,7 +63,9 @@ def test_a_numero_rechaza_basura():
 
 
 def test_numeros_en_texto_negativos_y_fechas():
-    assert fin.numeros_en_texto("Resultado (350.500) y -1.200,50") == [(350500, True), (1200.5, True)]
+    # "350.500" es ambiguo (350500 en formato argentino, 350,5 en ingles): se aceptan las dos lecturas, ambas negativas
+    leidos = fin.numeros_en_texto("Resultado (350.500) y -1.200,50")
+    assert (350500, True) in leidos and (350.5, True) in leidos and (1200.5, True) in leidos
     assert fin.numeros_en_texto("Ganancia $ 1.250.000") == [(1250000, False)]
     assert fin.numeros_en_texto("al 30/06/2026 total 35.000.000") == [(35000000, False)]  # la fecha no cuenta como numero
 
@@ -123,11 +125,18 @@ def test_descarta_si_el_signo_no_coincide():
 
 def test_descarta_citas_demasiado_cortas_o_largas_y_campos_raros():
     ok, desc = fin.verificar_cifras(BALANCE, [
-        {"campo": "ventas", "valor": 18400250, "cita": "Ingresos por ventas 18.400.250"},
-        {"campo": "activo_total", "valor": 35000000, "cita": " ".join(["Total del activo 35.000.000"] * 10)},
+        {"campo": "ventas", "valor": 18400250, "cita": "ventas 18.400.250"},  # 2 palabras: no alcanza
+        {"campo": "activo_total", "valor": 35000000, "cita": " ".join(["Total del activo 35.000.000"] * 20)},  # demasiado larga
         {"campo": "ebitda", "valor": 1, "cita": CITAS["ventas"]},
     ])
     assert ok == {} and [d["motivo"] for d in desc] == ["largo_de_cita", "largo_de_cita", "campo_desconocido"]
+
+
+def test_una_fila_corta_de_tabla_es_cita_valida():
+    # caso real (Loma Negra, YPF): el rotulo y el numero ocupan una linea de 4 a 6 palabras
+    texto = "[pagina 3]\nEstado de situacion financiera\nTotal del activo 35.000.000\nTotal del pasivo 20.000.000"
+    ok, desc = fin.verificar_cifras(texto, [{"campo": "activo_total", "valor": 35000000, "cita": "Total del activo 35.000.000"}])
+    assert ok["activo_total"]["valor"] == 35000000 and desc == []
 
 
 def test_cifra_repetida_conserva_la_primera():
@@ -231,10 +240,10 @@ def test_nueva_version_del_extractor_reprocesa_y_reemplaza(tmp_path, monkeypatch
     a = preparar(tmp_path)
     cliente = ClienteFalso(respuesta())
     fin.ejecutar(a, [EMP], cliente, 10)
-    monkeypatch.setattr(fin, "VERSION_EXTRACTOR", "2")
+    monkeypatch.setattr(fin, "VERSION_EXTRACTOR", "9")
     fin.ejecutar(a, [EMP], cliente, 10)
     estado = fin.leer_financieros(a, EMP["cuit"])
-    assert len(cliente.pedidos) == 2 and len(estado["periodos"]) == 1 and estado["procesados"]["3600000"]["v"] == "2"
+    assert len(cliente.pedidos) == 2 and len(estado["periodos"]) == 1 and estado["procesados"]["3600000"]["v"] == "9"
 
 
 def test_escaneado_queda_marcado_y_no_se_reintenta(tmp_path):
@@ -293,3 +302,54 @@ def test_cli_financieros_sin_clave_no_llama_a_nada(monkeypatch, tmp_path, capsys
     monkeypatch.delenv("GCS_BUCKET", raising=False)
     assert main(["financieros", "--max", "1"]) == 2
     assert "ANTHROPIC_API_KEY" in capsys.readouterr().out
+
+
+# --- aprendido con balances reales ---------------------------------------------
+
+def test_balance_en_ingles_encuentra_las_paginas_relevantes():
+    texto = "[pagina 1]\nYPF SOCIEDAD ANONIMA FINANCIAL STATEMENTS AS OF JUNE 30, 2026\n\n" + \
+            "[pagina 2]\nNotas varias\n\n" + \
+            "[pagina 3]\nCondensed interim consolidated statement of financial position\nTotal assets 100\nTotal liabilities 60\nTotal equity 40\nCash and cash equivalents 5\n\n" + \
+            "[pagina 4]\nStatement of comprehensive income\nNet sales 200\nOperating profit 30\nNet income 10\n"
+    recorte, paginas = fin.armar_recorte(texto)
+    assert 3 in paginas and 4 in paginas and 2 not in paginas
+
+
+def test_documento_de_una_vinculada_no_se_guarda_a_nombre_de_la_empresa():
+    emp = {"empresa": "YPF S.A.", "cuit": "30546689979"}
+    ajeno = {"d": "RELAC.: VINCULADA - CUIT: 30-71412830-9 - YPF ENERGIA ELECTRICA S.A. - ESTADOS FINANCIEROS"}
+    propio = {"d": "CUIT: 30-54668997-9 - ESTADOS FINANCIEROS"}
+    assert fin.entidad_ajena(ajeno, emp) is True
+    assert fin.entidad_ajena({"d": "CUIT: 30-54668997-9 - X"}, {"empresa": "YPF", "cuit": "30546689979"}) is False
+    assert fin.entidad_ajena({"d": "sin cuit en la descripcion"}, emp) is False
+    assert propio["d"]
+
+
+def test_consolidado_e_individual_no_se_pisan_en_el_indice(tmp_path):
+    a = preparar(tmp_path)
+    estado = fin.leer_financieros(a, EMP["cuit"])
+    base = {"periodo": "2026-06-30", "tipo": "semestral", "acumulado": True, "moneda": "pesos", "unidad": "miles de pesos", "escala": 1000,
+            "periodo_verificado": True, "unidad_verificada": True, "balance_coherente": None, "descartadas": []}
+    cons = {"estado": "ok", **base, "cifras": {"ventas": {"valor": 200, "valor_abs": 200000, "cita": "x y z", "pagina": 1}}}
+    indiv = {"estado": "ok", **base, "cifras": {"ventas": {"valor": 150, "valor_abs": 150000, "cita": "x y z", "pagina": 1}}}
+    fin.registrar(estado, EMP, {"id": "10", "f": "2026-08-07", "u": "u", "d": "NORMA CONTABLE: NIIF - TIPO BALANCE: CONSOLIDADO - PERIODICIDAD: 3"}, cons)
+    fin.registrar(estado, EMP, {"id": "11", "f": "2026-08-07", "u": "u", "d": "NORMA CONTABLE: NIIF - TIPO BALANCE: INDIVIDUAL - PERIODICIDAD: 3"}, indiv)
+    fin.guardar_financieros(a, EMP["cuit"], estado)
+    assert fin.construir_indice_financieros(a, [EMP]) == 2
+    import gzip as _gz
+    import json as _js
+    filas = _js.loads(_gz.decompress(a.leer("cnv/indice/financieros.json.gz")))
+    assert {f["balance"]: f["ventas"] for f in filas} == {"consolidado": 200, "individual": 150}
+
+
+def test_numeros_en_formato_ingles_y_argentino():
+    nl = chr(10)
+    # balances en ingles (YPF): coma de miles y punto decimal
+    ok, desc = fin.verificar_cifras("[pagina 1]" + nl + "Revenues 26 11,520 9,249 6,574 4,641", [{"campo": "ventas", "valor": 11520, "cita": "Revenues 26 11,520 9,249"}], "millones de dolares")
+    assert ok["ventas"]["valor"] == 11520 and desc == []
+    ok, _ = fin.verificar_cifras("[pagina 1]" + nl + "Total assets 1,234,567.89", [{"campo": "activo_total", "valor": 1234567.89, "cita": "Total assets 1,234,567.89"}])
+    assert ok["activo_total"]["valor"] == 1234567.89
+    # argentino: "11,52" sigue siendo 11,52 y "1.234.567" sigue siendo 1234567
+    assert fin.numero_respaldado(11.52, "Cotizacion 11,52") and fin.numero_respaldado(1234567, "Ventas 1.234.567")
+    # y un numero distinto no se respalda
+    assert not fin.numero_respaldado(11521, "Revenues 11,520")

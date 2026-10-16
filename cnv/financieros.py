@@ -17,12 +17,12 @@ import unicodedata
 
 from . import almacen as alm
 
-VERSION_EXTRACTOR = "1"
+VERSION_EXTRACTOR = "3"
 MODELO = "claude-haiku-5-5"
 MAX_CARACTERES = 40_000
 CARACTERES_PORTADA = 3_000
-MIN_PALABRAS_CITA = 8
-MAX_PALABRAS_CITA = 25
+MIN_PALABRAS_CITA = 3  # una fila de tabla: rotulo + numero
+MAX_PALABRAS_CITA = 40
 MAX_INTENTOS = 3
 
 CAMPOS = ("ventas", "resultado_operativo", "resultado_neto", "activo_total", "pasivo_total",
@@ -41,6 +41,10 @@ PALABRAS_CLAVE = {
     "resultado del periodo": 4, "resultado del ejercicio": 4, "ganancia del periodo": 3, "ganancia del ejercicio": 3,
     "efectivo y equivalentes": 4, "prestamos": 3, "obligaciones negociables": 3, "endeudamiento": 4,
     "deudas financieras": 4, "pasivos financieros": 3, "deuda financiera": 4,
+    "statement of financial position": 10, "statement of comprehensive income": 10, "income statement": 8, "balance sheet": 6,
+    "total assets": 6, "total liabilities": 6, "total equity": 5, "net income": 4, "profit for the period": 4, "profit for the year": 4,
+    "operating profit": 5, "operating income": 5, "revenues": 3, "net sales": 4, "cash and cash equivalents": 4,
+    "borrowings": 4, "financial debt": 4, "loans": 2,
 }
 
 ESQUEMA = {
@@ -81,7 +85,8 @@ Devuelve:
   ventas (ingresos por ventas u ordinarios), resultado_operativo, resultado_neto (resultado del periodo), activo_total, pasivo_total,
   patrimonio_neto, deuda_financiera (total de prestamos y otros pasivos financieros, corriente mas no corriente, solo si figura como total o nota), efectivo (efectivo y equivalentes).
 - valor: el numero tal como esta impreso, SIN cambiar la escala (si el documento esta en miles, el valor va en miles). Negativo si esta entre parentesis o con signo menos.
-- cita: entre 8 y 25 palabras COPIADAS LITERALMENTE del documento (incluida la linea con el numero y su rotulo), que contengan ese numero tal cual aparece.
+- cita: entre 3 y 40 palabras COPIADAS LITERALMENTE del documento: la fila de la tabla completa, con su rotulo y el numero tal cual aparece (por ejemplo "Total del activo 3.456.789"). Si el rotulo y el numero estan en lineas distintas, copia ambas lineas seguidas.
+- El documento puede estar en espanol o en ingles (por ejemplo "Statement of financial position", "Total assets", "Net income"): los campos y rotulos se mapean igual.
 
 Reglas: no calcules, no sumes, no estimes, no completes. Si una cifra no figura o no estas seguro de la columna, omitela."""
 
@@ -185,12 +190,26 @@ def a_numero(token: str) -> float | None:
         return None
 
 
+def candidatos_numero(token: str) -> list:
+    """Valores posibles de un token. "11,520" es 11,52 en formato argentino y 11520 en formato ingles (los balances
+    en ingles de YPF usan coma de miles): cuando un solo separador va seguido de exactamente 3 digitos se aceptan
+    las dos lecturas; la cita sigue exigiendo que el modelo haya copiado el numero tal cual."""
+    base = a_numero(token)
+    if base is None:
+        return []
+    alternativas = {base}
+    m = re.fullmatch(r"(\d{1,3})([.,])(\d{3})", token.strip())
+    if m:
+        alternativas.add(float(m.group(1) + m.group(3)))  # el separador era de miles
+        alternativas.add(float(m.group(1) + "." + m.group(3)))  # el separador era decimal
+    return sorted(alternativas)
+
+
 def numeros_en_texto(texto: str) -> list:
     """[(valor, negativo)] de los numeros que aparecen en un texto; negativo si va entre parentesis o con signo menos."""
     salida = []
     for abre, menos, cuerpo, cierra in _RE_NUMERO.findall(texto):
-        v = a_numero(cuerpo)
-        if v is not None:
+        for v in candidatos_numero(cuerpo):
             salida.append((v, bool(menos) or (abre == "(" and cierra == ")")))
     return salida
 
@@ -362,6 +381,24 @@ def ya_procesado(estado: dict, doc_id: str) -> bool:
     return p.get("v") == VERSION_EXTRACTOR
 
 
+_RE_CUIT = re.compile(r"CUIT:?\s*(\d{2})-?(\d{8})-?(\d)")
+_RE_TIPO_BALANCE = re.compile(r"TIPO BALANCE:\s*([A-ZÁÉÍÓÚÑ]+)", re.I)
+
+
+def entidad_ajena(meta: dict, empresa: dict) -> bool:
+    """True si la descripcion del documento nombra el CUIT de OTRA entidad (balance de una vinculada presentado
+    bajo la empresa): sus cifras no son de esta empresa y no se guardan a su nombre."""
+    cuits = {"".join(m) for m in _RE_CUIT.findall(meta.get("d") or "")}
+    return bool(cuits) and empresa["cuit"] not in cuits
+
+
+def tipo_balance(meta: dict) -> str:
+    """"consolidado" / "individual" / "desconocido" segun la descripcion (TIPO BALANCE: ...)."""
+    m = _RE_TIPO_BALANCE.search(meta.get("d") or "")
+    t = m.group(1).lower() if m else ""
+    return "consolidado" if t.startswith("consol") else "individual" if t.startswith(("indiv", "separ")) else "desconocido"
+
+
 def registrar(estado: dict, empresa: dict, meta: dict, resultado: dict) -> None:
     """Anota el resultado de un documento y reemplaza los periodos que ese documento habia producido."""
     doc_id = meta["id"]
@@ -373,7 +410,7 @@ def registrar(estado: dict, empresa: dict, meta: dict, resultado: dict) -> None:
         marca["error"] = resultado.get("error", "")[:120]
     if resultado["estado"] == "ok":
         estado["periodos"].append({
-            "doc": doc_id, "empresa": empresa["empresa"], "fecha_presentacion": meta.get("f"), "url": meta.get("u"),
+            "doc": doc_id, "empresa": empresa["empresa"], "fecha_presentacion": meta.get("f"), "url": meta.get("u"), "balance": tipo_balance(meta),
             **{k: resultado[k] for k in ("periodo", "tipo", "acumulado", "moneda", "unidad", "escala", "periodo_verificado",
                                           "unidad_verificada", "balance_coherente", "cifras", "descartadas")},
         })
@@ -387,11 +424,11 @@ def construir_indice_financieros(almacen, empresas: list) -> int:
     for e in empresas:
         vistos = {}
         for p in leer_financieros(almacen, e["cuit"])["periodos"]:
-            clave = (p["periodo"], p["tipo"], p["acumulado"])
+            clave = (p["periodo"], p["tipo"], p["acumulado"], p.get("balance", "desconocido"))
             if clave not in vistos or int(p["doc"]) > int(vistos[clave]["doc"]):
                 vistos[clave] = p
         for p in vistos.values():
-            fila = {"cuit": e["cuit"], "empresa": e["empresa"], "periodo": p["periodo"], "tipo": p["tipo"], "acumulado": p["acumulado"],
+            fila = {"cuit": e["cuit"], "empresa": e["empresa"], "periodo": p["periodo"], "tipo": p["tipo"], "acumulado": p["acumulado"], "balance": p.get("balance", "desconocido"),
                     "moneda": p["moneda"], "unidad": p["unidad"], "escala": p["escala"], "doc": p["doc"], "fecha": p.get("fecha_presentacion"),
                     "periodo_verificado": p["periodo_verificado"], "balance_coherente": p["balance_coherente"]}
             fila.update({c: p["cifras"][c]["valor"] if c in p["cifras"] else None for c in CAMPOS})
@@ -430,6 +467,13 @@ def ejecutar(almacen, empresas: list, cliente, max_docs: int = 150, hasta_t: flo
         estado = estados.setdefault(e["cuit"], leer_financieros(almacen, e["cuit"]))
         texto = alm.leer_texto(almacen, e["cuit"], m["id"])
         if not texto:
+            continue
+        if entidad_ajena(m, e):
+            registrar(estado, e, m, {"estado": "otra_entidad"})
+            guardar_financieros(almacen, e["cuit"], estado)
+            total["procesados"] += 1
+            total["saltados"] += 1
+            print(f"  {e['empresa']} #{m['id']}: otra_entidad (balance de una vinculada)", flush=True)
             continue
         try:
             resultado = procesar_texto(texto, cliente)

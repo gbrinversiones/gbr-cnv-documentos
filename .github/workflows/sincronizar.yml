@@ -17,7 +17,7 @@ on:
         default: ""
       tipos:
         description: "Tipos de documento, separados por coma (hechos, estados_contables, prospectos, actas)"
-        default: "hechos"
+        default: "hechos,estados_contables"
       tiempo_max:
         description: "Segundos maximos por fragmento"
         default: "18000"
@@ -48,7 +48,7 @@ jobs:
         run: |
           DESDE="${{ github.event.inputs.desde }}"
           if [ -z "$DESDE" ]; then DESDE=$(date -u -d "30 days ago" +%F); fi
-          python -m cnv sync --desde "$DESDE" --tipos "${{ github.event.inputs.tipos || 'hechos' }}" \
+          python -m cnv sync --desde "$DESDE" --tipos "${{ github.event.inputs.tipos || 'hechos,estados_contables' }}" \
             --fragmento "${{ matrix.fragmento }}/4" --tiempo-max "${{ github.event.inputs.tiempo_max || '18000' }}"
 
   indice:
