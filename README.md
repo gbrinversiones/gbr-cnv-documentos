@@ -7,6 +7,7 @@ Descarga los documentos **públicos** que las empresas argentinas presentan en l
 - `python -m cnv sync`: lista los documentos de cada empresa, baja los que faltan, extrae el texto de los PDF (también los que vienen en ZIP) y guarda el texto y un índice por empresa. Tipos con texto: `hechos`, `estados_contables`, `prospectos` (prospectos, suplementos, avisos de suscripción y de resultado), `avisos_pago` (sección «Aviso de Pago») y `actas` (de directorio y de comisión fiscalizadora). Cualquier otra sección de la CNV queda como metadato (`t = "otros"`), sin texto.
 - `python -m cnv indice`: arma el índice global que usa el buscador.
 - `python -m cnv financieros`: extrae cifras clave de los estados contables ya descargados (ver abajo).
+- `python -m cnv avisos-pago`: estructura los avisos de pago de ONs ya descargados (ver abajo).
 - El workflow `Sincronizar documentos CNV` corre todos los días (y se puede disparar a mano para cargas grandes).
 
 ## Tipos de documento, topes y reintentos
@@ -27,7 +28,7 @@ python -m cnv sync --desde 2023-01-01 --tipos avisos_pago,actas
 El job diario trae los últimos 30 días de los cinco tipos; no hace falta tocarlo después de la carga histórica.
 
 ## Almacenamiento
-`cnv/texto/{cuit}/{doc_id}.txt.gz` · `cnv/indice/{cuit}.json` · `cnv/indice/global.json.gz` · `cnv/financieros/{cuit}.json` · `cnv/indice/financieros.json.gz`
+`cnv/texto/{cuit}/{doc_id}.txt.gz` · `cnv/indice/{cuit}.json` · `cnv/indice/global.json.gz` · `cnv/financieros/{cuit}.json` · `cnv/indice/financieros.json.gz` · `cnv/avisos_pago/{cuit}.json` · `cnv/indice/avisos_pago.json.gz`
 
 ## Cifras de estados contables (`cnv/financieros.py`)
 Segunda etapa: de cada documento de tipo `estados_contables` con texto, saca periodo (cierre AAAA-MM-DD), tipo (anual/trimestral/semestral), si es acumulado, moneda y unidad, y las cifras `ventas`, `resultado_operativo`, `resultado_neto`, `activo_total`, `pasivo_total`, `patrimonio_neto`, `deuda_financiera` y `efectivo`.
@@ -45,10 +46,21 @@ python -m cnv financieros --max 20 --solo 30546689979 --tiempo-max 600
 ```
 `--max` es el tope de documentos enviados al modelo por corrida (costo acotado); el workflow lo corre al final del job `indice` con `--max 150` y `continue-on-error`. Solo procesa documentos ya descargados: hay que haber corrido `python -m cnv sync --tipos estados_contables`.
 
+## Avisos de pago de ONs (`cnv/avisos_pago.py`)
+Del documento de tipo `avisos_pago` saca, por cada pago: `emisor`, `clase`, `ticker` (si figura), `tipo_pago` (`interes` | `amortizacion` | `ambos`), `fecha_pago`, `monto_total`, `moneda` (`pesos` | `dolares`), `valor_residual` y `tasa`. Es el dato más confiable para saber qué se pagó realmente.
+- **Verdad:** cada dato viene de `claude-haiku-5-5` (esquema JSON) con una cita de 2 a 45 palabras, y solo se publica si la cita está **literal** en el texto y el dato está en la cita: el número tal cual impreso (sin confundir `1.875` con `1.875.000`), la fecha en alguno de sus formatos, el texto del emisor/clase/ticker (ticker `[A-Z0-9]{3,8}`), las palabras *interés*/*amortización* para el tipo de pago y el símbolo (`US$`, `$`, «pesos»…) para la moneda. Un pago sin fecha o sin tipo respaldados no se publica. Lo descartado queda en `procesados[doc].descartados` con el motivo.
+- **Ahorro:** textos cortos (< 200 caracteres) y avisos que no nombran obligaciones/títulos de deuda (p. ej. dividendos) se saltean sin llamar al modelo.
+- **Idempotente:** igual que `financieros` (versión del extractor + hasta 3 reintentos de error; se guarda tras cada documento).
+- **Salidas:** `cnv/avisos_pago/{cuit}.json` (pagos con cita y página) y `cnv/indice/avisos_pago.json.gz` (una fila por pago, sin citas; si dos avisos traen el mismo pago, queda el más nuevo). Los números van como figuran; `valor_residual_unidad`/`tasa_unidad` dicen si son `porcentaje` o `monto`, y `ambiguo` lista los números que podrían leerse en formato inglés (`1,500`).
+```
+export ANTHROPIC_API_KEY=...
+python -m cnv avisos-pago --max 50 --solo 30546689979
+```
+
 ## Configuración (repo)
 - Secret `GCP_SA_KEY`: JSON de la cuenta de servicio con rol *Storage Object Admin* sobre el bucket.
 - Variable `GCS_BUCKET`: nombre del bucket.
-- Secret `ANTHROPIC_API_KEY`: solo para `python -m cnv financieros`.
+- Secret `ANTHROPIC_API_KEY`: solo para `financieros`, `resumenes` y `avisos-pago`.
 
 ## Desarrollo
 ```
