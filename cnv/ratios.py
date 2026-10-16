@@ -159,5 +159,5 @@ def construir(almacen, empresas: list) -> dict:
                 else:
                     stats["calculados"][n] += 1
     salida = {"version": VERSION, "formulas": FORMULAS, "emisores": emisores}
-    almacen.guardar("cnv/indice/ratios.json.gz", alm.comprimir(json.dumps(salida, ensure_ascii=False, separators=(",", ":")).encode("utf-8")))
+    alm.guardar_si_cambio(almacen, "cnv/indice/ratios.json.gz", alm.comprimir(json.dumps(salida, ensure_ascii=False, separators=(",", ":")).encode("utf-8")))
     return stats

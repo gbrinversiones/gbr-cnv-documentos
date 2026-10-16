@@ -10,7 +10,6 @@ Estructura en el almacen:
   cnv/indice/avisos_pago.json.gz     tabla plana, una fila por pago (sin citas)
 """
 import datetime as dt
-import gzip
 import json
 import re
 import time
@@ -315,7 +314,7 @@ def construir_indice(almacen, empresas: list) -> int:
             fila["ambiguo"] = sorted(c for c in CAMPOS_NUMERICOS if c in p and p[c].get("ambiguo")) or None
             filas.append(fila)
     filas.sort(key=lambda f: (f["fecha_pago"], f["cuit"]), reverse=True)
-    almacen.guardar("cnv/indice/avisos_pago.json.gz", alm.comprimir(json.dumps(filas, ensure_ascii=False, separators=(",", ":")).encode("utf-8")))
+    alm.guardar_si_cambio(almacen, "cnv/indice/avisos_pago.json.gz", alm.comprimir(json.dumps(filas, ensure_ascii=False, separators=(",", ":")).encode("utf-8")))
     return len(filas)
 
 

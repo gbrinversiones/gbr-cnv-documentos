@@ -23,6 +23,14 @@ def comprimir(datos: bytes) -> bytes:
     return buf.getvalue()
 
 
+def guardar_si_cambio(almacen, nombre: str, datos: bytes) -> bool:
+    """Escribe solo si el contenido es distinto del que ya esta (no resube lo que no cambio). True si escribio."""
+    if almacen.leer(nombre) == datos:
+        return False
+    almacen.guardar(nombre, datos)
+    return True
+
+
 class AlmacenLocal:
     def __init__(self, raiz: str):
         self.raiz = raiz
