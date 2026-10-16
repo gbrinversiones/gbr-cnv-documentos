@@ -12,6 +12,7 @@ from cnv import universo as uni
 
 AQUI = os.path.dirname(__file__)
 OK = open(os.path.join(AQUI, "fixtures", "empresa_cnv_ok.html"), encoding="utf-8").read()
+SIN_RESULTADOS = open(os.path.join(AQUI, "fixtures", "empresa_cnv_sin_resultados.html"), encoding="utf-8").read()
 PORTADA = open(os.path.join(AQUI, "fixtures", "portada_cnv_generica.html"), encoding="utf-8").read()
 
 
@@ -219,3 +220,45 @@ def test_cli_universo_verificar_y_sugerir(monkeypatch, capsys, tmp_path):
     salida = capsys.readouterr().out
     assert "Verificación del universo" in salida and "Candidatos para «transportadora»" in salida
     assert os.path.exists(tmp_path / "i.json")
+
+
+# --- hallazgo con la CNV real: ventana de fechas, "No se encontrarón resultados" y equivalencias --------------
+
+def test_la_verificacion_pide_siempre_una_ventana_amplia():
+    s = Sesion({C1: OK})
+    uni.consultar_cuit(C1, s, dormir=no_dormir)
+    assert s.pedidos[0][0].endswith(f"/Empresa/{C1}?fdesde=01/01/2016")
+
+
+def test_no_se_encontraron_resultados_es_cuit_inexistente_y_no_razon_ilegible():
+    estado, razon, frag = uni.razon_social_de_pagina(SIN_RESULTADOS)
+    assert (estado, razon) == ("sin_resultados", None) and "No se encontrar" in frag
+    inf = uni.verificar([{"empresa": "Fantasma S.A.", "cuit": C3}], Sesion({C3: SIN_RESULTADOS}), dormir=no_dormir)
+    assert inf["filas"][0]["veredicto"] == "cuit_no_existe_en_cnv" and inf["resumen"] == {"cuit_no_existe_en_cnv": 1}
+    # con o sin tilde en "encontrarón"
+    assert uni.razon_social_de_pagina("<p>Resultados de busqueda: No se encontraron resultados</p>")[0] == "sin_resultados"
+
+
+@pytest.mark.parametrize("csv,cnv,esperado", [
+    ("Morixe Hnos", "MORIXE HERMANOS S.A.C.I.F.A.", "coincide"),
+    ("Cia. Introductora de Buenos Aires", "COMPAÑIA INTRODUCTORA DE BUENOS AIRES S.A.", "coincide"),
+    ("Importadora y Exportadora de la Patagonia", "IMP. Y EXP. DE LA PATAGONIA S.A.", "coincide"),
+    ("Imp. y Exp. de la Patagonia SRL", "Importadora y Exportadora de la Patagonia S.R.L.", "coincide"),
+    ("Empresa Ejemplo S.A.U.", "EMPRESA EJEMPLO S.A.", "coincide"),
+    ("Edenor", "EMPRESA DISTRIBUIDORA Y COMERCIALIZADORA NORTE S.A. (EDENOR)", "coincide"),          # alias entre parentesis
+    ("Empresa Distribuidora y Comercializadora Norte", "EMPRESA DISTRIBUIDORA Y COMERCIALIZADORA NORTE S.A. (EDENOR)", "coincide"),
+    ("Transener", "Cia. De Transporte De Energia Electrica En Alta Tension S.A.", "distinta"),   # misma empresa pero solo una persona puede decirlo
+    ("Banco Galicia", "BANCO MACRO S.A.", "parcial"),
+])
+def test_equivalencias_de_nombres(csv, cnv, esperado):
+    assert uni.comparar(csv, cnv) == esperado
+
+
+def test_transener_sigue_marcada_para_revision_humana():
+    inf = uni.verificar([{"empresa": "Transener", "cuit": C1}], Sesion({C1: OK.replace("PAMPA ENERGIA S.A.", "Cia. De Transporte De Energia Electrica En Alta Tension S.A.")}), dormir=no_dormir)
+    assert inf["filas"][0]["veredicto"] == "razon_social_distinta" and "A revisar a mano (1)" in uni.a_markdown_verificacion(inf)
+
+
+def test_variantes_de_razon():
+    assert uni.variantes_de_razon("A S.A. (ALIAS) y (OTRO)") == ["A S.A. (ALIAS) y (OTRO)", "A S.A. y", "ALIAS", "OTRO"]
+    assert uni.variantes_de_razon("") == [] and uni.variantes_de_razon(None) == []

@@ -7,8 +7,8 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 
 from . import almacen as alm
-from . import ocr
-from .descarga import Limites, texto_de_presentacion
+from . import avisos_pago, ocr
+from .descarga import Limites, extraer_pdf, pdfs_de_presentacion, texto_de_presentacion
 from .listado import listar, sesion
 
 # Tipos de los que se baja el texto. "otros" (y cualquier seccion nueva de la CNV) queda solo como metadato en el indice.
@@ -80,6 +80,8 @@ def _procesar(almacen, empresa: dict, d: dict, previo: dict | None, limites: Lim
         meta["trunc"] = r["truncado"]
     if r.get("ocr"):
         meta["ocr"] = r["ocr"]  # paginas leidas por OCR: texto menos confiable (ver cnv/ocr.py)
+    if r.get("serie"):
+        meta["serie"] = r["serie"]  # metadata de la CNV (clase/serie); respaldo para los avisos de pago
     if r.get("escaneado"):
         meta["escaneado"] = True  # se guarda igual (como antes), pero marcado: sirve para el OCR y para el informe de salud
         if r.get("ocr_intentado"):
@@ -171,6 +173,63 @@ def reprocesar_escaneados(almacen, empresa: dict, limites: Limites | None = None
     finally:
         alm.guardar_indice_empresa(almacen, empresa["cuit"], sorted(por_id.values(), key=lambda x: int(x["id"]), reverse=True))
     return {"ocr": hechos, "sin_texto": sin_texto, "pendientes": len(cola) - hechos - sin_texto}
+
+
+def ocr_formularios(almacen, empresa: dict, limites: Limites | None = None, hasta_t: float | None = None, max_docs: int | None = None) -> dict:
+    """Avisos de pago cuyo PDF es un formulario sin valores en el texto (ver avisos_pago.es_formulario_sin_valores): vuelve a bajar el PDF,
+    renderiza cada pagina y la lee con tesseract descartando los numeros poco confiables. El resultado va a una ruta NUEVA
+    (cnv/texto/{cuit}/{doc_id}.ocr.txt.gz); el texto original no se toca. Devuelve {"leidos","sin_texto","pendientes"} o {"error": ...}."""
+    if not ocr.activado():
+        return {"leidos": 0, "sin_texto": 0, "pendientes": 0, "error": "CNV_OCR no esta activado"}
+    cfg = ocr.configuracion()
+    try:
+        ocr.comprobar(cfg["idioma"])
+    except ocr.OcrNoDisponible as error:
+        return {"leidos": 0, "sin_texto": 0, "pendientes": 0, "error": str(error)}
+    indice = alm.leer_indice_empresa(almacen, empresa["cuit"])
+    por_id = {m["id"]: m for m in indice}
+    cola = []
+    for m in indice:
+        if m.get("t") != "avisos_pago" or not m.get("texto_ok") or m.get("ocr_form") or m.get("ocr_form_intentado") or not m.get("u"):
+            continue
+        if avisos_pago.es_formulario_sin_valores(alm.leer_texto(almacen, empresa["cuit"], m["id"]) or ""):
+            cola.append(m)
+    if max_docs is not None:
+        cola = cola[:max_docs]
+    leidos = sin_texto = 0
+
+    def guardar():
+        alm.guardar_indice_empresa(almacen, empresa["cuit"], sorted(por_id.values(), key=lambda x: int(x["id"]), reverse=True))
+
+    try:
+        for m in cola:
+            if hasta_t and time.monotonic() > hasta_t:
+                break
+            try:
+                pdfs = _con_reintentos(lambda: pdfs_de_presentacion(m["u"], sesion(), limites, hasta_t), intentos=2)["pdfs"]
+            except Exception:  # la CNV no respondio: no se marca como intentado, se reintenta en la proxima corrida
+                continue
+            partes, paginas, ilegibles, numericas = [], 0, 0, 0
+            for nombre, pdf in pdfs:
+                total = extraer_pdf(pdf, 1)["paginas"]
+                o = ocr.ocr_pdf_confiable(pdf, total, cfg["max_paginas"], cfg["idioma"], max(cfg["dpi"], 300), ocr.confianza_minima())
+                partes.append(o["texto"])
+                paginas, numericas, ilegibles = paginas + o["paginas_ocr"], numericas + o["numericas"], ilegibles + o["ilegibles"]
+            texto = "\n\n".join(partes)
+            nuevo = dict(m)
+            if numericas - ilegibles > 0:  # al menos un numero leido con confianza: hay algo que extraer
+                alm.guardar_texto_ocr(almacen, empresa["cuit"], m["id"], texto)
+                nuevo.update({"ocr_form": paginas, "ocr_form_numeros": numericas - ilegibles, "ocr_form_ilegibles": ilegibles})
+                leidos += 1
+            else:
+                nuevo.update({"ocr_form_intentado": True, "ocr_form_ilegibles": ilegibles})
+                sin_texto += 1
+            por_id[m["id"]] = nuevo
+            if (leidos + sin_texto) % GUARDAR_CADA == 0:
+                guardar()
+    finally:
+        guardar()
+    return {"leidos": leidos, "sin_texto": sin_texto, "pendientes": len(cola) - leidos - sin_texto}
 
 
 def construir_indice_global(almacen, empresas: list) -> int:

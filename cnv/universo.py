@@ -23,7 +23,13 @@ URL_AUTOCOMPLETADO = "https://www.cnv.gov.ar/SitioWeb/Empresas/Autocomplete"
 # la razon social va entre el rotulo y la primera marca de estado de la pagina; "Sin" solo cuenta como palabra entera
 _RE_RAZON = re.compile(r"(?i:Resultados de b[uú]squeda:)\s*(.+?)\s+(?:En Oferta|Sin\b|Retirad|ALYC|CUIT)")
 _RE_MARCADOR = re.compile(r"Resultados de b[uú]squeda:", re.I)
-_SUFIJOS = {"sa", "s", "a", "sau", "srl", "saic", "saica", "sacifa", "ciasa", "c", "i", "u", "y", "e", "de", "del", "la", "el", "los", "las", "sociedad", "anonima",
+# Con una ventana de fechas reciente y sin presentaciones, la CNV muestra "Resultados de busqueda: No se encontrarón resultados..."
+# en lugar de la razon social; por eso la verificacion usa SIEMPRE una ventana amplia.
+DESDE_VERIFICACION = "01/01/2016"
+_RE_SIN_RESULTADOS = re.compile(r"Resultados de b[uú]squeda:\s*No se encontrar[oó]n\s+resultados", re.I)
+# abreviaturas habituales en las razones sociales (ya sin acentos ni puntos) -> forma completa
+_EQUIVALENCIAS = {"cia": "compania", "hnos": "hermanos", "imp": "importadora", "exp": "exportadora", "cias": "companias", "hno": "hermano"}
+_SUFIJOS = {"sa", "s", "a", "r", "l", "sau", "srl", "saic", "saica", "sacifa", "ciasa", "c", "i", "u", "y", "e", "de", "del", "la", "el", "los", "las", "sociedad", "anonima",
             "sucursal", "argentina", "argentino", "holding", "grupo", "cia", "co", "sc", "scpa", "sacif", "sapem", "saci", "sh", "ltd", "inc", "llc"}
 
 
@@ -33,18 +39,33 @@ def normalizar(s: str) -> str:
 
 
 def palabras_clave(nombre: str) -> list:
-    """Palabras que identifican a la empresa (sin acentos, sin sufijos societarios)."""
-    return [w for w in re.split(r"[^a-z0-9]+", normalizar(nombre)) if w and w not in _SUFIJOS]
+    """Palabras que identifican a la empresa (sin acentos, sin sufijos societarios, con las abreviaturas comunes expandidas)."""
+    palabras = [_EQUIVALENCIAS.get(w, w) for w in re.split(r"[^a-z0-9]+", normalizar(nombre)) if w]
+    return [w for w in palabras if w not in _SUFIJOS]
+
+
+def variantes_de_razon(razon: str) -> list:
+    """La razon social tal cual, sin el texto entre parentesis y solo el contenido de los parentesis: la CNV a veces agrega el alias
+    ("EMPRESA DISTRIBUIDORA Y COMERCIALIZADORA NORTE S.A. (EDENOR)")."""
+    sin = " ".join(re.sub(r"\([^)]*\)", " ", razon or "").split())
+    dentro = [d.strip() for d in re.findall(r"\(([^)]*)\)", razon or "") if d.strip()]
+    return [v for v in dict.fromkeys([razon or "", sin, *dentro]) if v]
 
 
 def comparar(nombre_csv: str, razon_cnv: str) -> str:
-    """"coincide" (las palabras clave de uno estan todas en el otro), "parcial" (comparten alguna) o "distinta"."""
-    a, b = set(palabras_clave(nombre_csv)), set(palabras_clave(razon_cnv))
-    if not a or not b:
-        return "distinta"
-    if a <= b or b <= a:
-        return "coincide"
-    return "parcial" if a & b else "distinta"
+    """"coincide" (las palabras clave de uno estan todas en el otro), "parcial" (comparten alguna) o "distinta".
+    Se prueba contra la razon completa, sin alias y solo el alias; gana el mejor resultado."""
+    orden = {"coincide": 0, "parcial": 1, "distinta": 2}
+    a = set(palabras_clave(nombre_csv))
+    mejor = "distinta"
+    for v in variantes_de_razon(razon_cnv):
+        b = set(palabras_clave(v))
+        if not a or not b:
+            continue
+        r = "coincide" if (a <= b or b <= a) else "parcial" if a & b else "distinta"
+        if orden[r] < orden[mejor]:
+            mejor = r
+    return mejor
 
 
 def _texto_plano(html: str) -> str:
@@ -53,9 +74,12 @@ def _texto_plano(html: str) -> str:
 
 
 def razon_social_de_pagina(html: str) -> tuple:
-    """(estado, razon_social | None, fragmento). "ok" si la pagina muestra "Resultados de busqueda: <razon>",
-    "sin_razon" si hay marcador pero no se pudo aislar el nombre, "sin_marcador" si es la portada generica (CUIT inexistente)."""
+    """(estado, razon_social | None, fragmento). "ok" si la pagina muestra "Resultados de busqueda: <razon>", "sin_resultados" si dice
+    "No se encontrarón resultados", "sin_razon" si hay marcador pero no se pudo aislar el nombre, "sin_marcador" si es la portada
+    generica (CUIT inexistente)."""
     texto = _texto_plano(html)
+    if _RE_SIN_RESULTADOS.search(texto):
+        return "sin_resultados", None, texto[_RE_SIN_RESULTADOS.search(texto).start():][:160]
     m = _RE_RAZON.search(texto)
     if m:
         return "ok", m.group(1).strip(), texto[m.start():m.start() + 160]
@@ -85,8 +109,7 @@ def consultar_cuit(cuit: str, s=None, intentos: int = 3, espera: float = 4.0, do
     dormir = dormir or time.sleep
 
     def bajar():
-        desde = (dt.date.today() - dt.timedelta(days=30)).strftime("%d/%m/%Y")  # ventana corta: solo importa la cabecera con la razon social
-        r = s.get(URL_LISTADO.format(cuit=cuit, desde=desde), timeout=60)
+        r = s.get(URL_LISTADO.format(cuit=cuit, desde=DESDE_VERIFICACION), timeout=120)  # ventana amplia: ver DESDE_VERIFICACION
         r.raise_for_status()
         r.encoding = "utf-8"
         return r.text
@@ -102,8 +125,8 @@ def consultar_cuit(cuit: str, s=None, intentos: int = 3, espera: float = 4.0, do
 def veredicto(fila: dict, consulta: dict) -> str:
     if consulta["estado"] == "error":
         return "error_de_red"
-    if consulta["estado"] == "sin_marcador":
-        return "cuit_no_existe_en_cnv"
+    if consulta["estado"] in ("sin_marcador", "sin_resultados"):
+        return "cuit_no_existe_en_cnv"  # tampoco aparece con la ventana amplia (ver DESDE_VERIFICACION)
     if consulta["estado"] == "sin_razon":
         return "sin_razon_social_legible"
     return {"coincide": "coincide", "parcial": "revisar_nombre_parcial", "distinta": "razon_social_distinta"}[comparar(fila["empresa"], consulta["razon_social"])]

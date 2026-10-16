@@ -1,0 +1,21 @@
+[pagina 1]
+AVISO DE PAGO DE SERVICIOS
+OBLIGACIONES NEGOCIABLES
+Emisor:
+EMPRESA EJEMPLO S.A.
+Clase / Serie:
+Clase XXIV
+Codigo de negociacion:
+EJC24
+Moneda de pago:
+Dolares estadounidenses US$
+Se comunica a los tenedores de las Obligaciones Negociables que se pondra a disposicion el pago de servicios de:
+Intereses
+Fecha de pago:
+15/11/2026
+Tasa de interes aplicable:
+7,5 % nominal anual
+Monto total a pagar:
+US$ 1.875.000
+Valor residual luego del pago:
+[ilegible]

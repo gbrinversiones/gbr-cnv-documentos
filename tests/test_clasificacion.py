@@ -61,7 +61,7 @@ def test_categoria_fuera_de_la_lista_se_descarta(tmp_path):
     a = montar(tmp_path, {"1": {}})
     t = cla.ejecutar(a, [EMP], Cliente(ok(categoria="recompra_de_bonos")), 10)
     m = estado(a)["1"]
-    assert t == {"clasificados": 0, "descartados": 1, "errores": 0, "pendientes": 0}
+    assert t == {"clasificados": 0, "descartados": 1, "errores": 0, "pendientes": 0, "reintentos": 0}
     assert "k" not in m and m["kx"] == 1  # queda sin clasificar, nunca con una categoria inventada
 
 
@@ -147,3 +147,53 @@ def test_k_sobrevive_a_resumenes_y_a_una_nueva_sincronizacion(tmp_path):
     assert m["r"] == "Recompra de ONs." and m["k"] == "recompra_on"
     fusion = sincronizar._fusionar(m, {"id": "1", "texto_ok": True, "p": 3})
     assert fusion["k"] == "recompra_on" and fusion["kv"] == "1"
+
+
+# --- citas con variaciones tipograficas y un reintento (hallazgo con datos reales) ---------------
+
+TEXTO_TIPOGRAFICO = ("[pagina 1]\nLa Sociedad informa que el Directorio resolvio \u201cla recompra de obligaciones\n"
+                     "negociables\u201d \u2013 Clase 5 \u2013 por hasta  US$ 5.000.000.")
+
+
+@pytest.mark.parametrize("cita", [
+    'la recompra de obligaciones negociables - Clase 5',          # comillas fuera, guion comun en vez de raya
+    '"la recompra de obligaciones negociables" \u2014 Clase 5',     # comillas rectas, otra raya
+    "la  recompra de obligaciones   negociables Clase 5 por hasta US$ 5.000.000",  # espacios dobles y salto de linea del PDF
+    "LA RECOMPRA DE OBLIGACIONES NEGOCIABLES",                    # mayusculas
+])
+def test_cita_con_variaciones_tipograficas_se_acepta(cita):
+    assert cla.verificar("recompra_on", cita, "t", TEXTO_TIPOGRAFICO) == ("recompra_on", None)
+
+
+def test_cita_con_palabras_cambiadas_sigue_descartandose():
+    assert cla.verificar("recompra_on", "la compra de obligaciones negociables Clase 5", "t", TEXTO_TIPOGRAFICO) == (None, "cita_no_esta_en_documento")
+
+
+def test_cita_no_encontrada_se_reintenta_una_vez_con_un_aviso():
+    c = Cliente({"categoria": "recompra_on", "cita": "el directorio aprobo recomprar ONs por cinco millones"},
+                {"categoria": "recompra_on", "cita": "recompra de obligaciones negociables"})
+    stats = {}
+    assert cla.clasificar(c, "E", "t", TEXTO_TIPOGRAFICO, stats) == ("recompra_on", None)
+    assert len(c.pedidos) == 2 and stats == {"reintentos": 1}
+    segundo = c.pedidos[1]["messages"][0]["content"]
+    assert "NO figura en el documento" in segundo and "MAS CORTO" in segundo and "recomprar ONs" in segundo and segundo.startswith("<documento>")
+
+
+def test_si_el_reintento_tambien_falla_se_descarta_y_nunca_hay_un_tercer_pedido():
+    c = Cliente({"categoria": "dividendos", "cita": "se pagaran dividendos en efectivo mañana"})
+    assert cla.clasificar(c, "E", "t", TEXTO_TIPOGRAFICO) == (None, "cita_no_esta_en_documento")
+    assert len(c.pedidos) == 2
+
+
+def test_no_se_reintenta_lo_que_no_es_cita_inexistente():
+    c = Cliente({"categoria": "inventada", "cita": "x"})
+    assert cla.clasificar(c, "E", "t", TEXTO_TIPOGRAFICO) == (None, "categoria_fuera_de_lista") and len(c.pedidos) == 1
+    c = Cliente({"categoria": "otro", "cita": ""})
+    assert cla.clasificar(c, "E", "t", TEXTO_TIPOGRAFICO) == ("otro", None) and len(c.pedidos) == 1
+
+
+def test_el_reintento_que_acierta_se_cuenta_en_el_total(tmp_path):
+    a = montar(tmp_path, {"1": {}})
+    c = Cliente({"categoria": "recompra_on", "cita": "cita que no esta en el texto del hecho"}, ok())
+    t = cla.ejecutar(a, [EMP], c, 10)
+    assert t["clasificados"] == 1 and t["reintentos"] == 1 and estado(a)["1"]["k"] == "recompra_on"

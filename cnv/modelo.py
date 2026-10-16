@@ -7,16 +7,16 @@ import json
 MODELO = "claude-haiku-5-5"
 
 
-def pedir_json(cliente, sistema: str, entrada: str, esquema: dict, max_tokens: int = 2048) -> dict:
+def pedir_json(cliente, sistema: str, entrada: str, esquema: dict, max_tokens: int = 2048, aviso: str = "") -> dict:
     """Devuelve el JSON del modelo. Lanza RuntimeError si la respuesta esta incompleta, vacia o no es un objeto JSON:
-    el llamador lo trata como error reintentable (no como dato)."""
+    el llamador lo trata como error reintentable (no como dato). `aviso` se agrega al final del mensaje (para un reintento)."""
     r = cliente.messages.create(
         model=MODELO,
         max_tokens=max_tokens,
         thinking={"type": "disabled"},
         output_config={"effort": "medium", "format": {"type": "json_schema", "schema": esquema}},
         system=sistema,
-        messages=[{"role": "user", "content": f"<documento>\n{entrada}\n</documento>"}],
+        messages=[{"role": "user", "content": f"<documento>\n{entrada}\n</documento>" + (f"\n\n{aviso}" if aviso else "")}],
     )
     if getattr(r, "stop_reason", None) in ("refusal", "max_tokens"):
         raise RuntimeError(f"respuesta incompleta: {r.stop_reason}")

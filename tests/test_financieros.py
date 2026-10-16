@@ -353,3 +353,24 @@ def test_numeros_en_formato_ingles_y_argentino():
     assert fin.numero_respaldado(11.52, "Cotizacion 11,52") and fin.numero_respaldado(1234567, "Ventas 1.234.567")
     # y un numero distinto no se respalda
     assert not fin.numero_respaldado(11521, "Revenues 11,520")
+
+
+# --- citas con comillas tipograficas / invisibles (hallazgo con datos reales) -----------------------
+
+def test_cita_con_comillas_y_caracteres_invisibles_se_acepta():
+    cita = "\u201cTotal del activo\u201d\u200b 35.000.000 33.000.000"
+    ok, _ = fin.verificar_cifras(BALANCE, [{"campo": "activo_total", "valor": 35000000, "cita": cita}])
+    assert "activo_total" in ok
+    doc = "[pagina 1]\nEl \u00abTotal del activo\u00bb consolidado 35.000.000"
+    ok, _ = fin.verificar_cifras(doc, [{"campo": "activo_total", "valor": 35000000, "cita": 'El "Total del activo" consolidado 35.000.000'}])
+    assert "activo_total" in ok
+
+
+def test_la_tolerancia_no_afloja_la_regla_del_numero():
+    # los separadores de miles/decimales NO se ignoran: "12.5" y "125" son distintos
+    doc = "[pagina 1]\nTotal del activo 125 mas texto"
+    ok, desc = fin.verificar_cifras(doc, [{"campo": "activo_total", "valor": 12.5, "cita": "Total del activo 12.5 mas texto"}])
+    assert ok == {} and desc[0]["motivo"] == "cita_no_esta_en_documento"
+    # y el numero sigue teniendo que estar dentro de la cita
+    ok, desc = fin.verificar_cifras(BALANCE, [{"campo": "activo_total", "valor": 99, "cita": CITAS["activo_total"]}])
+    assert ok == {} and desc[0]["motivo"] == "numero_no_esta_en_cita"

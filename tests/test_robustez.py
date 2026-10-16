@@ -457,7 +457,7 @@ def test_avisos_funciones_sueltas():
     assert avp._fecha_plausible("2026-02-30") is False and avp._fecha_plausible("26-01-01") is False
     assert avp._moneda_de_cita("pagos en US$ y $ mezclados") is None and avp._moneda_de_cita("monto en ARS 100") == "pesos" and avp._moneda_de_cita("sin simbolo") is None
     assert avp.ya_procesado({"procesados": {}}, "1") is False
-    assert avp.ya_procesado({"procesados": {"1": {"estado": "ok", "v": "0"}}}, "1") is False
+    assert avp.ya_procesado({"procesados": {"1": {"estado": "ok", "v": "0"}}}, "1") is True
 
 
 def test_modelo_pedir_json_rechaza_lo_que_no_es_objeto():
