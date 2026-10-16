@@ -13,6 +13,7 @@ import time
 import zipfile
 from dataclasses import dataclass
 
+from . import ocr
 from .listado import sesion
 
 URL_VALET = "https://aif2.cnv.gov.ar/api/ValetKeyProvider/GetPublicValetKey/{guid}?operation=DownloadBlob"
@@ -188,6 +189,7 @@ def texto_de_presentacion(url: str, s=None, limites: Limites | None = None, hast
         return {}
     partes, paginas, nombres, fallos = [], 0, [], []
     cupo_pag, cupo_car, truncado = limites.paginas, limites.caracteres, None
+    ocr_paginas, ocr_intentado, ocr_error, leidas_total = 0, False, None, 0
     for a in lista[:MAX_ADJUNTOS]:
         if time.monotonic() > hasta_t:
             fallos.append({"archivo": a["nombre"], "motivo": "sin tiempo"})
@@ -213,7 +215,21 @@ def texto_de_presentacion(url: str, s=None, limites: Limites | None = None, hast
             if e["cifrado"] or e["ilegible"]:
                 fallos.append({"archivo": etiqueta, "motivo": "pdf cifrado" if e["cifrado"] else "pdf ilegible"})
                 continue
+            if ocr.activado() and ocr.necesita_ocr(e["texto"], e["leidas"]):
+                cfg = ocr.configuracion()
+                try:
+                    o = ocr.ocr_pdf(pdf, e["paginas"], min(cfg["max_paginas"], cupo_pag), cfg["idioma"], cfg["dpi"])
+                except ocr.OcrNoDisponible as error:  # el entorno no tiene tesseract: no es un fallo del documento
+                    ocr_error = str(error)
+                else:
+                    ocr_intentado = True
+                    limite = min(cfg["max_paginas"], cupo_pag)
+                    corte = None if e["paginas"] <= limite else "paginas" if cupo_pag <= cfg["max_paginas"] else "ocr_paginas"
+                    e = {**e, "texto": o["texto"], "leidas": o["paginas_ocr"], "truncado": corte}
+                    if len(re.sub(r"\[pagina \d+\]|\s", "", o["texto"])) > 0:
+                        ocr_paginas += o["paginas_ocr"]
             partes.append(e["texto"])
+            leidas_total += e["leidas"]
             nombres.append(etiqueta)
             paginas += e["paginas"]
             cupo_pag -= e["leidas"]
@@ -223,6 +239,7 @@ def texto_de_presentacion(url: str, s=None, limites: Limites | None = None, hast
     texto = "\n\n".join(p for p in partes if p)
     if not texto.strip() and not partes:
         return {"fallos": fallos} if fallos else {}
-    util = len(re.sub(r"\[pagina \d+\]|\s", "", texto))
     return {"texto": texto, "paginas": paginas, "archivos": nombres, "truncado": truncado, "fallos": fallos,
-            "escaneado": bool(paginas) and util < 40 * max(paginas, 1) * 0.1}
+            # escaneado: el texto que quedo es (casi) solo las marcas de pagina; es el marcador que usan el OCR y la salud de la base
+            "escaneado": ocr.necesita_ocr(texto, leidas_total),
+            "ocr": ocr_paginas, "ocr_intentado": ocr_intentado, "ocr_error": ocr_error}

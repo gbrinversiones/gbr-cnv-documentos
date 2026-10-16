@@ -1,0 +1,4 @@
+# Solo para el paso OCR opcional (ver cnv/ocr.py). Ademas hacen falta los paquetes del sistema:
+#   sudo apt-get install -y tesseract-ocr tesseract-ocr-spa poppler-utils
+pytesseract>=0.3.10
+pdf2image>=1.17

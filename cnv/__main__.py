@@ -3,12 +3,15 @@
                      [--max-docs N] [--solo CUIT] [--max-paginas 400] [--max-caracteres 1500000] [--max-mb 80]
   python -m cnv indice
   python -m cnv financieros [--max 150] [--solo CUIT] [--tiempo-max 1200]
+  python -m cnv escaneados                       # cuenta los PDF escaneados segun los marcadores (solo lee)
+  python -m cnv ocr [--max-docs N] [--tiempo-max 7200]   # OCR de los escaneados; requiere tesseract (ver cnv/ocr.py)
   python -m cnv clasificar [--max 500] [--tiempo-max 900]
   python -m cnv avisos-pago [--max 200] [--solo CUIT] [--tiempo-max 900]
 """
 import argparse
 import dataclasses
 import datetime as dt
+import json
 import os
 import sys
 import time
@@ -16,10 +19,12 @@ import time
 from . import almacen as alm
 from . import avisos_pago as avp
 from . import clasificacion as cla
+from . import escaneados as esc
+from . import ocr
 from . import financieros as fin
 from . import resumenes as res
 from .descarga import Limites
-from .sincronizar import TIPOS_DEFECTO, TIPOS_TEXTO, cargar_universo, construir_indice_global, sincronizar_empresa
+from .sincronizar import TIPOS_DEFECTO, TIPOS_TEXTO, cargar_universo, reprocesar_escaneados, construir_indice_global, sincronizar_empresa
 
 
 def main(argv=None) -> int:
@@ -44,6 +49,11 @@ def main(argv=None) -> int:
     f.add_argument("--max", type=int, default=150, help="maximo de documentos enviados al modelo por corrida (controla el costo)")
     f.add_argument("--solo", default=None, help="CUIT: procesa solo esa empresa")
     f.add_argument("--tiempo-max", type=int, default=1200, help="segundos; corta limpio y deja el resto para la proxima corrida")
+    sub.add_parser("escaneados")
+    oc = sub.add_parser("ocr")
+    oc.add_argument("--max-docs", type=int, default=None, help="tope de documentos por empresa y por corrida")
+    oc.add_argument("--tiempo-max", type=int, default=7200)
+    oc.add_argument("--solo", default=None, help="CUIT: procesa solo esa empresa")
     cl = sub.add_parser("clasificar")
     cl.add_argument("--max", type=int, default=500, help="maximo de hechos clasificados por corrida (controla el costo)")
     cl.add_argument("--tiempo-max", type=int, default=900)
@@ -56,6 +66,31 @@ def main(argv=None) -> int:
     almacen = alm.almacen_desde_entorno()
     universo = cargar_universo()
     if a.cmd == "indice":
+        print(f"indice global: {construir_indice_global(almacen, universo)} documentos")
+        return 0
+
+    if a.cmd == "escaneados":
+        print(json.dumps(esc.contar(almacen, universo), ensure_ascii=False, indent=1))
+        return 0
+
+    if a.cmd == "ocr":
+        os.environ["CNV_OCR"] = "1"  # pedir este comando ya es la activacion explicita
+        try:
+            ocr.comprobar(ocr.configuracion()["idioma"])
+        except ocr.OcrNoDisponible as error:
+            print(f"OCR no disponible ({error}). Instalar tesseract-ocr, tesseract-ocr-spa, poppler-utils y requirements-ocr.txt")
+            return 2
+        limite = time.monotonic() + a.tiempo_max
+        total = {"ocr": 0, "sin_texto": 0, "pendientes": 0}
+        for e in universo:
+            if (a.solo and e["cuit"] != a.solo.replace("-", "")) or time.monotonic() > limite:
+                continue
+            r = reprocesar_escaneados(almacen, e, Limites.desde_entorno(), limite, a.max_docs)
+            for k in total:
+                total[k] += r[k]
+            if r["ocr"] or r["sin_texto"]:
+                print(f"  {e['empresa']}: {r['ocr']} con texto por OCR, {r['sin_texto']} sin texto", flush=True)
+        print("TOTAL", total)
         print(f"indice global: {construir_indice_global(almacen, universo)} documentos")
         return 0
 
