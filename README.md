@@ -184,7 +184,7 @@ Modelo: `claude-haiku-5-5`, **US$ 0,10 por millón de tokens de entrada y US$ 0,
 | Avisos de pago, formulario | formulario sin valores | — | — | **US$ 0** el aviso sin OCR; el OCR es CPU, no modelo | 0 |
 | Búsqueda (`busqueda`), OCR, salud, universo | — | — | — | **US$ 0** (sin modelo) | 0 |
 
-**Tope diario por diseño** (los `--max` del workflow): 150 estados contables + 400 resúmenes + 500 categorías + 200 avisos ⇒ **menos de US$ 1 por día** aun en el peor caso (≈ 0,6 + 0,07 + 0,15 + 0,2). Una carga histórica de, por ejemplo, 10.000 hechos + 3.000 estados contables + 3.000 avisos cuesta del orden de US$ 2 + 3,5 + 8 + 1,5 ≈ **US$ 15** (orden de magnitud; depende de los volúmenes reales).
+**Tope diario por diseño** (los `--max` del workflow): 150 estados contables + 400 resúmenes + 500 categorías + 200 avisos ⇒ **≈ US$ 0,6 por día con los costos típicos y ≈ US$ 1 en el peor caso** (0,6 + 0,07 + 0,15 + 0,2). Una carga histórica de, por ejemplo, 10.000 hechos (resumen + categoría ≈ US$ 4,8) + 3.000 estados contables (US$ 6–12) + 3.000 avisos (US$ 1,2–3) cuesta **del orden de US$ 12–20** (depende de los volúmenes reales).
 
 ## Tiempos de carga
 **Mediciones reales: ninguna** (no tengo acceso a la CNV ni al bucket). Lo que sigue son topes de configuración y un modelo simple para dimensionar.
