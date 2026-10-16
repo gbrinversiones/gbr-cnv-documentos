@@ -86,6 +86,11 @@ jobs:
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: python -m cnv resumenes --max 400 --tiempo-max 1500
+      - name: Clasificar hechos relevantes (Claude Haiku, max 500 por corrida)
+        continue-on-error: true
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: python -m cnv clasificar --max 500 --tiempo-max 900
       - name: Estructurar avisos de pago de ONs (Claude Haiku, max 200 por corrida)
         continue-on-error: true
         env:

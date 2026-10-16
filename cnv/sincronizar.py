@@ -136,7 +136,7 @@ def construir_indice_global(almacen, empresas: list) -> int:
     for e in empresas:
         for m in alm.leer_indice_empresa(almacen, e["cuit"]):
             if m.get("texto_ok"):
-                fila = {k: m.get(k) for k in ("id", "c", "e", "f", "t", "s", "d", "u", "p", "n", "r")}
+                fila = {k: m.get(k) for k in ("id", "c", "e", "f", "t", "s", "d", "u", "p", "n", "r", "k")}
                 if m.get("trunc"):  # solo cuando existe: avisa al buscador que el texto no cubre todo el documento
                     fila["tr"] = m["trunc"]["motivo"]
                 filas.append(fila)
