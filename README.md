@@ -4,10 +4,27 @@ Descarga los documentos **públicos** que las empresas argentinas presentan en l
 
 ## Cómo funciona
 - `data/universo.csv`: empresas (acciones y emisores de ONs que cotizan en BYMA) con su CUIT.
-- `python -m cnv sync`: lista los documentos de cada empresa, baja los que faltan, extrae el texto de los PDF (también los que vienen en ZIP) y guarda el texto y un índice por empresa.
+- `python -m cnv sync`: lista los documentos de cada empresa, baja los que faltan, extrae el texto de los PDF (también los que vienen en ZIP) y guarda el texto y un índice por empresa. Tipos con texto: `hechos`, `estados_contables`, `prospectos` (prospectos, suplementos, avisos de suscripción y de resultado), `avisos_pago` (sección «Aviso de Pago») y `actas` (de directorio y de comisión fiscalizadora). Cualquier otra sección de la CNV queda como metadato (`t = "otros"`), sin texto.
 - `python -m cnv indice`: arma el índice global que usa el buscador.
 - `python -m cnv financieros`: extrae cifras clave de los estados contables ya descargados (ver abajo).
 - El workflow `Sincronizar documentos CNV` corre todos los días (y se puede disparar a mano para cargas grandes).
+
+## Tipos de documento, topes y reintentos
+- **Topes por documento** (un prospecto puede tener cientos de páginas): `--max-paginas` / `CNV_MAX_PAGINAS` (400), `--max-caracteres` / `CNV_MAX_CARACTERES` (1.500.000) y `--max-mb` / `CNV_MAX_MB` (80, tamaño del archivo descargado). Los topes se reparten entre todos los adjuntos del documento. El texto se corta en límite de página y **queda registrado**: el índice por empresa agrega `trunc` = `{"motivo": "paginas"|"caracteres", "paginas_total", "paginas_leidas"}` y el índice global agrega `tr` con el motivo (solo en los documentos truncados; el resto no cambia).
+- **Descarga robusta:** cada adjunto se baja con hasta 4 intentos y espera creciente (3, 6, 9 s) ante cortes de red, 5xx o 429; los errores definitivos (404, archivo sobre el tope) no se reintentan. Cada documento tiene un tope de 15 minutos de reloj.
+- **Resultados parciales:** si de dos adjuntos uno falla, se guarda el texto del que salió bien con `parcial` (cantidad de adjuntos fallidos) y `error` (motivo de cada uno). Se reintenta en corridas siguientes (hasta 3 intentos) y un reintento que traiga menos texto no pisa el que ya estaba. PDF cifrados con clave (no se pueden leer) y ZIP corruptos quedan como fallo con su motivo.
+- **Un corte no pierde lo bajado:** el índice por empresa se guarda cada 10 documentos y al salir (también si el job se cancela).
+
+### Carga histórica
+Los tipos nuevos pesan más que los hechos relevantes. Para cargar el historial se dispara el workflow a mano (*Actions → Sincronizar documentos CNV → Run workflow*) o se corre local, siempre por tipo y repitiendo hasta que `pendientes` sea 0 (es idempotente: lo ya bajado no se vuelve a bajar):
+```
+# desde la web: desde=2023-01-01  tipos=prospectos  tiempo_max=18000   (repetir hasta que no queden pendientes)
+# o local, una empresa de prueba:
+DATOS_LOCAL=datos python -m cnv sync --desde 2023-01-01 --tipos prospectos --solo 30546689979 --max-paginas 400
+# avisos de pago y actas son livianos: pueden ir juntos
+python -m cnv sync --desde 2023-01-01 --tipos avisos_pago,actas
+```
+El job diario trae los últimos 30 días de los cinco tipos; no hace falta tocarlo después de la carga histórica.
 
 ## Almacenamiento
 `cnv/texto/{cuit}/{doc_id}.txt.gz` · `cnv/indice/{cuit}.json` · `cnv/indice/global.json.gz` · `cnv/financieros/{cuit}.json` · `cnv/indice/financieros.json.gz`

@@ -1,19 +1,21 @@
 """Linea de comandos:
-  python -m cnv sync [--desde 2023-01-01] [--tipos hechos,estados_contables] [--fragmento 0/4] [--tiempo-max 18000] [--max-docs N] [--solo CUIT]
+  python -m cnv sync [--desde 2023-01-01] [--tipos hechos,estados_contables,prospectos,avisos_pago,actas] [--fragmento 0/4] [--tiempo-max 18000]
+                     [--max-docs N] [--solo CUIT] [--max-paginas 400] [--max-caracteres 1500000] [--max-mb 80]
   python -m cnv indice
   python -m cnv financieros [--max 150] [--solo CUIT] [--tiempo-max 1200]
 """
 import argparse
+import dataclasses
 import datetime as dt
+import os
 import sys
 import time
-
-import os
 
 from . import almacen as alm
 from . import financieros as fin
 from . import resumenes as res
-from .sincronizar import TIPOS_DEFECTO, cargar_universo, construir_indice_global, sincronizar_empresa
+from .descarga import Limites
+from .sincronizar import TIPOS_DEFECTO, TIPOS_TEXTO, cargar_universo, construir_indice_global, sincronizar_empresa
 
 
 def main(argv=None) -> int:
@@ -27,6 +29,9 @@ def main(argv=None) -> int:
     s.add_argument("--max-docs", type=int, default=None, help="tope de documentos por empresa y por corrida")
     s.add_argument("--solo", default=None, help="CUIT: procesa solo esa empresa")
     s.add_argument("--trabajadores", type=int, default=3)
+    s.add_argument("--max-paginas", type=int, default=None, help="tope de paginas de texto por documento (defecto 400, o CNV_MAX_PAGINAS)")
+    s.add_argument("--max-caracteres", type=int, default=None, help="tope de caracteres por documento (defecto 1.500.000, o CNV_MAX_CARACTERES)")
+    s.add_argument("--max-mb", type=int, default=None, help="tamano maximo del archivo a bajar (defecto 80, o CNV_MAX_MB)")
     sub.add_parser("indice")
     rs = sub.add_parser("resumenes")
     rs.add_argument("--max", type=int, default=300, help="maximo de hechos resumidos por corrida (controla el costo)")
@@ -69,7 +74,13 @@ def main(argv=None) -> int:
 
     i, n = (int(x) for x in a.fragmento.split("/"))
     empresas = [e for k, e in enumerate(universo) if k % n == i and (not a.solo or e["cuit"] == a.solo.replace("-", ""))]
-    tipos = tuple(t for t in a.tipos.split(",") if t)
+    tipos = tuple(t.strip() for t in a.tipos.split(",") if t.strip())
+    desconocidos = [t for t in tipos if t not in TIPOS_TEXTO]
+    if desconocidos:
+        print(f"tipos desconocidos: {', '.join(desconocidos)} (validos: {', '.join(TIPOS_TEXTO)})")
+        return 2
+    topes = {"paginas": a.max_paginas, "caracteres": a.max_caracteres, "mb": a.max_mb}
+    limites = dataclasses.replace(Limites.desde_entorno(), **{k: v for k, v in topes.items() if v and v > 0})
     desde = dt.date.fromisoformat(a.desde)
     limite = time.monotonic() + a.tiempo_max
     total = {"nuevos": 0, "fallidos": 0, "pendientes": 0, "empresas_con_error": 0}
@@ -78,7 +89,7 @@ def main(argv=None) -> int:
             print("corte por tiempo: el resto queda para la proxima corrida")
             break
         try:
-            r = sincronizar_empresa(almacen, e, desde, tipos, a.trabajadores, a.max_docs, limite)
+            r = sincronizar_empresa(almacen, e, desde, tipos, a.trabajadores, a.max_docs, limite, limites)
         except Exception as error:
             total["empresas_con_error"] += 1
             print(f"  {e['empresa']}: ERROR {error}", flush=True)

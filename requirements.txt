@@ -4,3 +4,4 @@ pypdf>=4.0
 anthropic>=1.0
 google-cloud-storage>=2.16
 pytest>=8.0
+cryptography>=42
