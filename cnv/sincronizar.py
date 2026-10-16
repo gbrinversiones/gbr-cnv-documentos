@@ -1,7 +1,6 @@
 """Sincronizacion incremental de documentos de la CNV: lista, baja lo que falta, extrae texto y actualiza los indices."""
 import csv
 import datetime as dt
-import gzip
 import json
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -245,5 +244,5 @@ def construir_indice_global(almacen, empresas: list) -> int:
                     fila["oc"] = m["ocr"]
                 filas.append(fila)
     filas.sort(key=lambda m: (m["f"] or "", m["id"]), reverse=True)
-    almacen.guardar("cnv/indice/global.json.gz", gzip.compress(json.dumps(filas, ensure_ascii=False, separators=(",", ":")).encode("utf-8")))
+    alm.guardar_si_cambio(almacen, "cnv/indice/global.json.gz", alm.comprimir(json.dumps(filas, ensure_ascii=False, separators=(",", ":")).encode("utf-8")))
     return len(filas)
