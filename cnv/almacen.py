@@ -100,7 +100,7 @@ def leer_indice_empresa(almacen, cuit: str) -> list:
 
 
 def guardar_texto_ocr(almacen, cuit: str, doc_id: str, texto: str) -> None:
-    almacen.guardar(f"cnv/texto/{cuit}/{doc_id}.ocr.txt.gz", gzip.compress(texto.encode("utf-8")))
+    almacen.guardar(f"cnv/texto/{cuit}/{doc_id}.ocr.txt.gz", comprimir(texto.encode("utf-8")))
 
 
 def leer_texto_ocr(almacen, cuit: str, doc_id: str) -> str | None:

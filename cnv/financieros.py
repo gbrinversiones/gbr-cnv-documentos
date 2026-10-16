@@ -16,7 +16,8 @@ import unicodedata
 
 from . import almacen as alm
 
-VERSION_EXTRACTOR = "3"
+VERSION_EXTRACTOR = "4"  # 4: agrega activo/pasivo corriente, intereses y depreciaciones (para los ratios)
+VERSIONES_COMPATIBLES = ("3",)  # sus resultados siguen valiendo; solo se re-extraen a pedido (--completar-campos)
 MODELO = "claude-haiku-5-5"
 MAX_CARACTERES = 40_000
 CARACTERES_PORTADA = 3_000
@@ -25,7 +26,8 @@ MAX_PALABRAS_CITA = 40
 MAX_INTENTOS = 3
 
 CAMPOS = ("ventas", "resultado_operativo", "resultado_neto", "activo_total", "pasivo_total",
-          "patrimonio_neto", "deuda_financiera", "efectivo")
+          "patrimonio_neto", "deuda_financiera", "efectivo",
+          "activo_corriente", "pasivo_corriente", "intereses", "depreciaciones_amortizaciones")
 TIPOS_PERIODO = ("anual", "trimestral", "semestral")
 
 _RE_PAGINA = re.compile(r"\[pagina (\d+)\]")
@@ -44,6 +46,8 @@ PALABRAS_CLAVE = {
     "total assets": 6, "total liabilities": 6, "total equity": 5, "net income": 4, "profit for the period": 4, "profit for the year": 4,
     "operating profit": 5, "operating income": 5, "revenues": 3, "net sales": 4, "cash and cash equivalents": 4,
     "borrowings": 4, "financial debt": 4, "loans": 2,
+    "activo corriente": 4, "pasivo corriente": 4, "intereses perdidos": 4, "gastos por intereses": 4, "depreciaciones": 3, "amortizaciones": 2,
+    "flujo de efectivo": 5, "flujos de efectivo": 5, "current assets": 4, "current liabilities": 4, "interest expense": 4, "depreciation and amortization": 4,
 }
 
 ESQUEMA = {
@@ -82,7 +86,9 @@ Devuelve:
 - moneda y unidad tal como las declara el documento (por ejemplo moneda "pesos", unidad "miles de pesos"; o "dolares" y "millones de dolares").
 - cifras: solo las que figuren EXPLICITAMENTE en el texto, de la columna del periodo actual (no la comparativa):
   ventas (ingresos por ventas u ordinarios), resultado_operativo, resultado_neto (resultado del periodo), activo_total, pasivo_total,
-  patrimonio_neto, deuda_financiera (total de prestamos y otros pasivos financieros, corriente mas no corriente, solo si figura como total o nota), efectivo (efectivo y equivalentes).
+  patrimonio_neto, deuda_financiera (total de prestamos y otros pasivos financieros, corriente mas no corriente, solo si figura como total o nota), efectivo (efectivo y equivalentes),
+  activo_corriente (total del activo corriente), pasivo_corriente (total del pasivo corriente), intereses (intereses perdidos / gastos por intereses del periodo: solo si hay una linea explicita de intereses, no el resultado financiero neto),
+  depreciaciones_amortizaciones (total de depreciaciones y amortizaciones del periodo, del estado de flujo de efectivo o de la nota correspondiente; no las del ejercicio comparativo).
 - valor: el numero tal como esta impreso, SIN cambiar la escala (si el documento esta en miles, el valor va en miles). Negativo si esta entre parentesis o con signo menos.
 - cita: entre 3 y 40 palabras COPIADAS LITERALMENTE del documento: la fila de la tabla completa, con su rotulo y el numero tal cual aparece (por ejemplo "Total del activo 3.456.789"). Si el rotulo y el numero estan en lineas distintas, copia ambas lineas seguidas.
 - El documento puede estar en espanol o en ingles (por ejemplo "Statement of financial position", "Total assets", "Net income"): los campos y rotulos se mapean igual.
@@ -232,7 +238,9 @@ _PALABRAS_PERDIDA = ("perdida", "deficit", "negativo", "quebranto")
 def numero_respaldado(valor: float, cita: str) -> bool:
     """El numero debe figurar en la cita (mismo valor absoluto y mismo signo)."""
     for v, negativo in numeros_en_texto(cita):
-        if abs(abs(valor) - v) > 1e-6 * max(1.0, v):
+        # misma cifra salvo el error de representacion decimal del float: 1e-6 relativo (que habia antes) dejaba pasar un ultimo digito
+        # distinto en numeros grandes (8.400.001 contra 8.400.000)
+        if abs(abs(valor) - v) > 1e-9 * max(1.0, v):
             continue
         if (valor < 0) == negativo:
             return True
@@ -373,13 +381,17 @@ def guardar_financieros(almacen, cuit: str, datos: dict) -> None:
     almacen.guardar(f"cnv/financieros/{cuit}.json", json.dumps(datos, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
 
 
-def ya_procesado(estado: dict, doc_id: str) -> bool:
-    """Procesado con esta version del extractor (o agotados los intentos de un error)."""
+def ya_procesado(estado: dict, doc_id: str, completar: bool = False) -> bool:
+    """Procesado con esta version del extractor (o agotados los intentos de un error). Las versiones compatibles tambien cuentan:
+    no se vuelve a pagar un documento solo porque se agregaron campos; con `completar` se vuelven a pedir los "ok" de versiones
+    compatibles para que sumen los campos nuevos."""
     p = estado["procesados"].get(doc_id)
     if not p:
         return False
     if p.get("estado") == "error":
         return p.get("intentos", 0) >= MAX_INTENTOS
+    if p.get("v") in VERSIONES_COMPATIBLES:
+        return not (completar and p.get("estado") == "ok")
     return p.get("v") == VERSION_EXTRACTOR
 
 
@@ -440,23 +452,23 @@ def construir_indice_financieros(almacen, empresas: list) -> int:
     return len(filas)
 
 
-def candidatos(almacen, empresas: list) -> list:
+def candidatos(almacen, empresas: list, completar: bool = False) -> list:
     """[(empresa, meta)] de estados contables con texto y sin procesar, los mas recientes primero."""
     salida = []
     for e in empresas:
         estado = leer_financieros(almacen, e["cuit"])
         for m in alm.leer_indice_empresa(almacen, e["cuit"]):
             # un documento leido por OCR no se usa para cifras: un digito mal leido igual "verificaria" contra su propia cita
-            if m.get("t") == "estados_contables" and m.get("texto_ok") and not m.get("ocr") and not ya_procesado(estado, m["id"]):
+            if m.get("t") == "estados_contables" and m.get("texto_ok") and not m.get("ocr") and not ya_procesado(estado, m["id"], completar):
                 salida.append((e, m))
     salida.sort(key=lambda x: (x[1].get("f") or "", int(x[1]["id"])), reverse=True)
     return salida
 
 
-def ejecutar(almacen, empresas: list, cliente, max_docs: int = 150, hasta_t: float | None = None) -> dict:
+def ejecutar(almacen, empresas: list, cliente, max_docs: int = 150, hasta_t: float | None = None, completar: bool = False) -> dict:
     """Procesa hasta `max_docs` documentos pendientes (el tope cuenta documentos enviados al modelo)."""
     total = {"procesados": 0, "ok": 0, "saltados": 0, "errores": 0, "pendientes": 0}
-    pend = candidatos(almacen, empresas)
+    pend = candidatos(almacen, empresas, completar)
     estados = {}
     llamadas = 0
     for i, (e, m) in enumerate(pend):

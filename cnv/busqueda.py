@@ -87,12 +87,8 @@ def nombre_shard(n: int) -> str:
 
 
 def _gz(datos) -> bytes:
-    """JSON compacto comprimido de forma DETERMINISTA (mtime=0): el mismo contenido da los mismos bytes."""
-    crudo = json.dumps(datos, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-    buf = io.BytesIO()
-    with gzip.GzipFile(fileobj=buf, mode="wb", compresslevel=9, mtime=0) as f:
-        f.write(crudo)
-    return buf.getvalue()
+    """JSON compacto comprimido de forma DETERMINISTA: el mismo contenido da los mismos bytes."""
+    return alm.comprimir(json.dumps(datos, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
 
 
 def _publicar(almacen, nombre: str, datos: bytes) -> bool:

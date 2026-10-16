@@ -21,9 +21,14 @@ CITAS = {
     "patrimonio_neto": "PATRIMONIO Total del patrimonio neto 14.000.000 12.500.000 Total del pasivo y patrimonio neto 35.000.000",
     "deuda_financiera": "Prestamos bancarios 7.200.800 6.600.400 Total de prestamos y obligaciones negociables 14.200.800 13.100.400",
     "efectivo": "Activo corriente Efectivo y equivalentes de efectivo 1.234.567 987.654 Cuentas por cobrar comerciales 4.500.000",
+    "activo_corriente": "Total del activo corriente 9.876.543 8.765.432",
+    "pasivo_corriente": "Total del pasivo corriente 8.400.000 8.100.000",
+    "intereses": "Resultado del periodo 1.250.000 (350.500) Intereses perdidos (1.100.000) (900.000)",
+    "depreciaciones_amortizaciones": "Depreciaciones y amortizaciones del periodo 1.600.000 1.500.000",
 }
 VALORES = {"ventas": 18400250, "resultado_operativo": 3300250, "resultado_neto": 1250000, "activo_total": 35000000,
-           "pasivo_total": 21000000, "patrimonio_neto": 14000000, "deuda_financiera": 14200800, "efectivo": 1234567}
+           "pasivo_total": 21000000, "patrimonio_neto": 14000000, "deuda_financiera": 14200800, "efectivo": 1234567,
+           "activo_corriente": 9876543, "pasivo_corriente": 8400000, "intereses": -1100000, "depreciaciones_amortizaciones": 1600000}
 
 
 def respuesta(cifras=None, **extra):
@@ -374,3 +379,48 @@ def test_la_tolerancia_no_afloja_la_regla_del_numero():
     # y el numero sigue teniendo que estar dentro de la cita
     ok, desc = fin.verificar_cifras(BALANCE, [{"campo": "activo_total", "valor": 99, "cita": CITAS["activo_total"]}])
     assert ok == {} and desc[0]["motivo"] == "numero_no_esta_en_cita"
+
+
+# --- campos nuevos (ratios), versiones compatibles y gzip determinista --------------------------------------
+
+def test_los_campos_nuevos_se_verifican_con_cita_y_numero():
+    ok, desc = fin.verificar_cifras(BALANCE, respuesta()["cifras"], "miles de pesos")
+    assert desc == [] and ok["activo_corriente"]["valor"] == 9876543 and ok["pasivo_corriente"]["valor"] == 8400000
+    assert ok["intereses"]["valor"] == -1100000 and ok["depreciaciones_amortizaciones"]["valor"] == 1600000
+    malo = [{"campo": "pasivo_corriente", "valor": 8400001, "cita": CITAS["pasivo_corriente"]}]
+    assert fin.verificar_cifras(BALANCE, malo)[1] == [{"campo": "pasivo_corriente", "motivo": "numero_no_esta_en_cita"}]
+
+
+def test_documentos_de_la_version_anterior_no_se_vuelven_a_pagar_salvo_que_se_pida(tmp_path):
+    a = alm.AlmacenLocal(str(tmp_path))
+    emp = {"empresa": "E", "cuit": "30111111112"}
+    alm.guardar_indice_empresa(a, emp["cuit"], [{"id": "7", "t": "estados_contables", "f": "2026-08-10", "texto_ok": True, "d": "x"},
+                                                {"id": "8", "t": "estados_contables", "f": "2026-08-11", "texto_ok": True, "d": "x"}])
+    for i in "78":
+        alm.guardar_texto(a, emp["cuit"], i, BALANCE)
+    fin.guardar_financieros(a, emp["cuit"], {"periodos": [], "procesados": {"7": {"v": "3", "estado": "ok"}, "8": {"v": "3", "estado": "sin_cifras"}}})
+    assert fin.candidatos(a, [emp]) == []                                            # v3 sigue valiendo: no se gasta modelo
+    assert [m["id"] for _, m in fin.candidatos(a, [emp], completar=True)] == ["7"]    # a pedido: solo los "ok" para sumarles los campos nuevos
+    c = ClienteFalso(respuesta())
+    t = fin.ejecutar(a, [emp], c, max_docs=5, completar=True)
+    estado = fin.leer_financieros(a, emp["cuit"])
+    assert t["ok"] == 1 and len(c.pedidos) == 1 and estado["procesados"]["7"]["v"] == fin.VERSION_EXTRACTOR
+    assert "activo_corriente" in estado["periodos"][0]["cifras"]
+    assert fin.candidatos(a, [emp], completar=True) == []                             # y ya no se repite
+
+
+def test_gzip_determinista_en_todos_los_indices(tmp_path):
+    assert alm.comprimir(b"hola") == alm.comprimir(b"hola") and gzip.decompress(alm.comprimir(b"hola")) == b"hola"
+    a = alm.AlmacenLocal(str(tmp_path))
+    alm.guardar_texto(a, "30111111112", "1", "texto")
+    primero = a.leer("cnv/texto/30111111112/1.txt.gz")
+    time.sleep(1.1)                       # cruzar un segundo: antes la hora iba en la cabecera y los bytes cambiaban
+    alm.guardar_texto(a, "30111111112", "1", "texto")
+    assert a.leer("cnv/texto/30111111112/1.txt.gz") == primero
+
+
+def test_un_ultimo_digito_distinto_en_un_numero_grande_no_se_acepta():
+    assert fin.numero_respaldado(8400000, "Total 8.400.000 8.100.000") is True
+    assert fin.numero_respaldado(8400001, "Total 8.400.000 8.100.000") is False
+    assert fin.numero_respaldado(1234567.89, "Total 1.234.567,89") is True            # el decimal sigue andando
+    assert fin.numero_respaldado(1234567.88, "Total 1.234.567,89") is False
