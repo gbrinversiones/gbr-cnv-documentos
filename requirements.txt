@@ -1,0 +1,5 @@
+requests>=2.31
+beautifulsoup4>=4.12
+pypdf>=4.0
+google-cloud-storage>=2.16
+pytest>=8.0

@@ -1,0 +1,70 @@
+# Descarga los documentos publicos de la CNV de las empresas del universo (data/universo.csv), extrae el texto
+# y lo guarda en Google Cloud Storage. Corre todos los dias y se puede disparar a mano (para la carga inicial
+# se usa una fecha "desde" lejana y se repite hasta que no queden pendientes).
+#
+# Este repo es PUBLICO a proposito (los minutos de GitHub Actions son ilimitados). No contiene datos privados:
+# las credenciales viven solo en los Secrets del repo (GCP_SA_KEY) y las variables (GCS_BUCKET).
+name: Sincronizar documentos CNV
+
+on:
+  schedule:
+    - cron: "30 12 * * *"   # 09:30 ART, todos los dias
+    - cron: "30 22 * * 1-5" # 19:30 ART, despues del cierre
+  workflow_dispatch:
+    inputs:
+      desde:
+        description: "Fecha desde (AAAA-MM-DD). Diario: 30 dias atras."
+        default: ""
+      tipos:
+        description: "Tipos de documento, separados por coma (hechos, estados_contables, prospectos, actas)"
+        default: "hechos"
+      tiempo_max:
+        description: "Segundos maximos por fragmento"
+        default: "18000"
+
+concurrency:
+  group: sincronizar-cnv
+  cancel-in-progress: false
+
+jobs:
+  descargar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 345
+    strategy:
+      fail-fast: false
+      matrix:
+        fragmento: [0, 1, 2, 3]
+    env:
+      GCS_BUCKET: ${{ vars.GCS_BUCKET }}
+      GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Descargar y extraer texto
+        run: |
+          DESDE="${{ github.event.inputs.desde }}"
+          if [ -z "$DESDE" ]; then DESDE=$(date -u -d "30 days ago" +%F); fi
+          python -m cnv sync --desde "$DESDE" --tipos "${{ github.event.inputs.tipos || 'hechos' }}" \
+            --fragmento "${{ matrix.fragmento }}/4" --tiempo-max "${{ github.event.inputs.tiempo_max || '18000' }}"
+
+  indice:
+    needs: descargar
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      GCS_BUCKET: ${{ vars.GCS_BUCKET }}
+      GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Reconstruir el indice global
+        run: python -m cnv indice
