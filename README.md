@@ -34,7 +34,8 @@ python -m cnv sync --desde 2023-01-01 --tipos avisos_pago,actas
 El job diario trae los últimos 30 días de los cinco tipos; no hace falta tocarlo después de la carga histórica.
 
 ## Almacenamiento
-`cnv/texto/{cuit}/{doc_id}.txt.gz` · `cnv/indice/{cuit}.json` · `cnv/indice/global.json.gz` · `cnv/financieros/{cuit}.json` · `cnv/indice/financieros.json.gz` · `cnv/avisos_pago/{cuit}.json` · `cnv/indice/avisos_pago.json.gz`
+Todo cuelga de `cnv/` en el bucket. Detalle campo por campo en el [diccionario de datos](#diccionario-de-datos-bucket):
+`cnv/texto/{cuit}/{doc_id}.txt.gz` · `cnv/texto/{cuit}/{doc_id}.ocr.txt.gz` · `cnv/indice/{cuit}.json` · `cnv/indice/global.json.gz` · `cnv/financieros/{cuit}.json` · `cnv/indice/financieros.json.gz` · `cnv/avisos_pago/{cuit}.json` · `cnv/indice/avisos_pago.json.gz` · `cnv/busqueda/{docs.json.gz, meta.json, s00..s63.json.gz}`
 
 ## Cifras de estados contables (`cnv/financieros.py`)
 Segunda etapa: de cada documento de tipo `estados_contables` con texto, saca periodo (cierre AAAA-MM-DD), tipo (anual/trimestral/semestral), si es acumulado, moneda y unidad, y las cifras `ventas`, `resultado_operativo`, `resultado_neto`, `activo_total`, `pasivo_total`, `patrimonio_neto`, `deuda_financiera` y `efectivo`.
@@ -111,6 +112,87 @@ Para encontrar documentos por lo que dicen y no solo por el título. `python -m 
 - **Publicación:** primero los shards, luego `docs.json.gz`, al final `meta.json` (el lector arranca por `meta.json`). Si se acaba el tiempo antes de publicar, **no se escribe nada** y el índice anterior sigue vigente (exit code 3).
 - **Oráculo:** `buscar_bm25(almacen, consulta, k)` (BM25, `k1=1.2`, `b=0.75`, `idf = ln(1 + (N-df+0.5)/(df+0.5))`, desempate por menor `doc_idx`) y `tests/fixtures/busqueda_oraculo.json` (corpus sintético, índice resultante, stopwords, casos de tokenización, shards literales y 3 consultas con su ranking) para el test cruzado con el lector. Regenerar con `python -m tests.generar_oraculo` solo si cambia el contrato (y subir `VERSION`).
 - **Tamaño estimado para 20.000 documentos:** ~11 MB en total (64 shards de ~150–190 KB gz + `docs.json.gz` de ~90 KB); una consulta baja un shard por término. Es una simulación con un corpus sintético tipo Zipf (6,6 M de tokens, 145 mil términos), no una medición con documentos reales.
+
+## Diccionario de datos (bucket)
+Regla general: **solo se agregan campos**; ninguna ruta ni campo existente cambia de significado. Un campo opcional que no figura significa «no aplica / no pasó». Las fechas son `AAAA-MM-DD`. Los «números tal cual figuran» no están convertidos a unidades (ver `escala`).
+
+### `cnv/texto/{cuit}/{doc_id}.txt.gz`
+Texto UTF-8 comprimido del documento. Cada página es un bloque `[pagina N]\n<texto>`; los bloques se separan con una línea en blanco. Si la presentación trae varios adjuntos (hasta 3) o un ZIP con varios PDF, se concatenan y **la numeración de páginas reinicia en 1 en cada PDF**. Respeta los topes de páginas/caracteres (ver `trunc`). Un PDF escaneado queda con solo las marcas (`escaneado` en el índice).
+
+### `cnv/texto/{cuit}/{doc_id}.ocr.txt.gz`
+Solo para avisos de pago que son un formulario sin valores en el texto: la lectura por OCR (300 dpi) con los números de baja confianza reemplazados por `[ilegible]`. El texto original no se toca.
+
+### `cnv/indice/{cuit}.json` — lista de documentos de la empresa
+| Campo | Significado |
+|---|---|
+| `id` | número de la presentación en la CNV (string) |
+| `c`, `e` | CUIT (11 dígitos) y razón social del universo |
+| `f` | fecha de presentación |
+| `t` | tipo: `hechos`, `estados_contables`, `prospectos`, `avisos_pago`, `actas`, `otros` (solo metadato) |
+| `s` | sección de la CNV tal cual |
+| `d` | descripción (≤ 300 caracteres) |
+| `u` | URL pública de la presentación |
+| `texto_ok` | `true` si hay texto guardado |
+| `intentos`, `error` | intentos de descarga (se rinde a los 3) y último motivo de fallo |
+| `p`, `n` | páginas totales del PDF y caracteres del texto guardado |
+| `archivos` | nombres de los adjuntos leídos (≤ 3) |
+| `trunc` | `{motivo: "paginas"\|"caracteres"\|"ocr_paginas", paginas_total, paginas_leidas}` si el texto quedó cortado |
+| `parcial`, `error` | cantidad de adjuntos que fallaron aunque otro salió bien |
+| `escaneado` | el texto tiene < 25 caracteres por página (es una imagen) |
+| `ocr`, `ocr_intentado` | páginas leídas por OCR; o el OCR corrió y no sacó texto |
+| `ocr_form`, `ocr_form_numeros`, `ocr_form_ilegibles`, `ocr_form_intentado` | OCR de formularios de aviso de pago (páginas, números confiables, números ilegibles, intentado sin resultado) |
+| `serie` | `{d, id, obs}`: serie que declara la CNV en la presentación (si la pudo leer) |
+| `r` | resumen de una línea (solo `hechos`) |
+| `k`, `kv`, `kx` | categoría del hecho (lista cerrada), versión del clasificador e intentos de clasificación descartados |
+
+### `cnv/indice/global.json.gz` — lo que busca el explorador
+Una fila por documento **con texto**: `id, c, e, f, t, s, d, u, p, n, r, k` (los que no aplican van `null`), más `tr` (motivo del truncado) y `oc` (páginas por OCR) solo cuando existen. Orden: fecha descendente.
+
+### `cnv/financieros/{cuit}.json`
+`{"cuit", "periodos": [...], "procesados": {doc_id: {...}}}`.
+- `periodos[]`: `doc`, `empresa`, `fecha_presentacion`, `url`, `balance` (`consolidado`/`individual`/`desconocido`), `periodo` (cierre), `tipo` (`anual`/`trimestral`/`semestral`), `acumulado`, `moneda`, `unidad`, `escala` (1, 1000, 1000000), `periodo_verificado`, `unidad_verificada`, `balance_coherente` (activo ≈ pasivo + patrimonio, o `null`), `cifras` y `descartadas`.
+- `cifras{campo}` con `campo` ∈ `ventas, resultado_operativo, resultado_neto, activo_total, pasivo_total, patrimonio_neto, deuda_financiera, efectivo`: `{valor (tal cual figura), valor_abs (× escala), cita (literal), pagina}`. `descartadas[]`: `{campo, motivo}`.
+- `procesados{doc_id}`: `v` (versión del extractor), `estado` (`ok`, `escaneado`, `sin_paginas_relevantes`, `no_es_estado_contable`, `sin_periodo`, `sin_cifras`, `otra_entidad`, `error`), `fecha`, y `intentos`/`error` si falló.
+
+### `cnv/indice/financieros.json.gz`
+Una fila por empresa/periodo/tipo/acumulado/balance: `cuit, empresa, periodo, tipo, acumulado, balance, moneda, unidad, escala, doc, fecha, periodo_verificado, balance_coherente` + los 8 campos de cifras (valor tal cual figura o `null`).
+
+### `cnv/avisos_pago/{cuit}.json`
+`{"cuit", "pagos": [...], "procesados": {...}}`.
+- `pagos[]`: `doc`, `empresa`, `fecha_presentacion`, `url`, `emisor {valor, cita, pagina}` (o `null`), `fuente` (`pdf`/`ocr`), `serie_cnv` (metadata de la CNV, **no** verificada con cita) y los campos `clase`, `ticker`, `tipo_pago` (`interes`/`amortizacion`/`ambos`), `fecha_pago`, `monto_total`, `moneda` (`pesos`/`dolares`), `valor_residual`, `tasa`; cada uno `{valor, cita, pagina}` y, en los numéricos, `texto` (el número como figura), `ambiguo` (si podría leerse `1,500` como 1,5 o 1500) y `unidad` (`porcentaje`/`monto`, en valor residual y tasa). Todo campo presente tiene cita literal en el texto.
+- `procesados{doc_id}`: `v`, `estado` (`ok`, `sin_texto`, `no_es_pago_on`, `formulario_sin_valores`, `no_es_aviso_pago_on`, `sin_datos`, `sin_valores_legibles`, `error`), `fecha`, `descartados[] {pago, campo, motivo}`.
+
+### `cnv/indice/avisos_pago.json.gz`
+Una fila por pago (sin citas): `cuit, empresa, doc, fecha` (presentación), `emisor, fuente, serie_cnv, clase, ticker, tipo_pago, fecha_pago, monto_total, moneda, valor_residual, tasa, valor_residual_unidad, tasa_unidad, ambiguo`. Si dos avisos traen el mismo pago (rectificatoria) queda el más nuevo.
+
+### `cnv/busqueda/*`
+Índice BM25 de texto completo; formato y contrato con el lector en la sección «Índice de búsqueda de texto completo».
+
+### Fuera del bucket
+`python -m cnv universo --salida informes/universo.json` y `python -m cnv salud --formato json` producen informes locales (no se guardan en el bucket).
+
+## Costos estimados con Haiku
+Modelo: `claude-haiku-5-5`, **US$ 0,10 por millón de tokens de entrada y US$ 0,50 por millón de salida** (prompts de hasta 100.000 tokens; precios de la lista de la API a 2026-10-06, a verificar). No se usa caché de prompts. Los tokens de abajo son **estimaciones a partir de la cantidad de caracteres** (≈ 3,5 caracteres por token en prosa y ≈ 2,8 en balances llenos de números); el costo real se mide con `response.usage` (no está instrumentado todavía). No pude medir nada con documentos reales.
+
+| Etapa (comando) | Documento | Entrada típica | Salida típica | Costo por documento | Por 1.000 documentos |
+|---|---|---|---|---|---|
+| Descarga de `prospectos`, `actas`, `hechos`, `estados_contables`, `avisos_pago` | todos | — | — | **US$ 0** (sin modelo) | 0 |
+| Resumen (`resumenes`) | hecho relevante | ≈ 1.400 tokens (hasta 4.000 caracteres + instrucciones) | ≈ 70 (máx. 300) | ≈ US$ 0,00018 | ≈ US$ 0,18 |
+| Categoría (`clasificar`) | hecho relevante | ≈ 2.200 (hasta 6.000 caracteres + instrucciones) | ≈ 40; un 2.º pedido si la cita no figura | ≈ US$ 0,00024 (≈ 0,0003 con reintentos) | ≈ US$ 0,25–0,35 |
+| Cifras (`financieros`) | estado contable | ≈ 16.000 (recorte de hasta 43.000 caracteres) | ≈ 800 (máx. 4.096) | ≈ US$ 0,002 (máx. ≈ 0,004) | ≈ US$ 2–4 |
+| Avisos de pago (`avisos-pago`) | aviso con datos | ≈ 2.000 (hasta 20.000 caracteres ≈ 7.000) | ≈ 350 | ≈ US$ 0,0004 (máx. ≈ 0,001) | ≈ US$ 0,4–1 |
+| Avisos de pago, formulario | formulario sin valores | — | — | **US$ 0** el aviso sin OCR; el OCR es CPU, no modelo | 0 |
+| Búsqueda (`busqueda`), OCR, salud, universo | — | — | — | **US$ 0** (sin modelo) | 0 |
+
+**Tope diario por diseño** (los `--max` del workflow): 150 estados contables + 400 resúmenes + 500 categorías + 200 avisos ⇒ **menos de US$ 1 por día** aun en el peor caso (≈ 0,6 + 0,07 + 0,15 + 0,2). Una carga histórica de, por ejemplo, 10.000 hechos + 3.000 estados contables + 3.000 avisos cuesta del orden de US$ 2 + 3,5 + 8 + 1,5 ≈ **US$ 15** (orden de magnitud; depende de los volúmenes reales).
+
+## Tiempos de carga
+**Mediciones reales: ninguna** (no tengo acceso a la CNV ni al bucket). Lo que sigue son topes de configuración y un modelo simple para dimensionar.
+- **Descarga (`sync`)**: la CNV manda. Cada documento son ≥ 3 pedidos (página, llave, archivo) con hasta 4 reintentos por adjunto y tope de 15 minutos por documento. El workflow corre 4 fragmentos en paralelo × 3 hilos = 12 documentos a la vez, con un tope de 5 horas por fragmento. Capacidad por corrida = 12 × 18.000 s ÷ segundos por documento: **si cada documento tarda 10 s, ≈ 21.000 por corrida; a 20 s, ≈ 10.800; a 60 s, ≈ 3.600**. Lo que no entra queda pendiente y se retoma en la corrida siguiente (idempotente).
+- **Etapas con modelo** (por corrida, topes del workflow): `financieros` ≤ 150 documentos y 20 min; `resumenes` ≤ 400 y 25 min; `clasificar` ≤ 500 y 15 min; `avisos-pago` ≤ 200 y 15 min. Una carga histórica grande se hace repitiendo el workflow manual hasta que `pendientes` sea 0 (o subiendo `--max`).
+- **Índice de búsqueda**: ≤ 25 min; en una simulación local con 20.000 documentos sintéticos tardó ≈ 40 s con disco local (con GCS domina la lectura de los textos).
+- **OCR**: job aparte de hasta 150 min; el tope práctico es `CNV_OCR_MAX_PAGINAS` (40) por documento.
+- **Salud / universo / escaneados**: segundos a minutos; `universo --verificar` hace una consulta por empresa (≈ 121) con pausa de 0,5 s.
 
 ## Configuración (repo)
 - Secret `GCP_SA_KEY`: JSON de la cuenta de servicio con rol *Storage Object Admin* sobre el bucket.
