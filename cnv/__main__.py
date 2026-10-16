@@ -3,6 +3,7 @@
                      [--max-docs N] [--solo CUIT] [--max-paginas 400] [--max-caracteres 1500000] [--max-mb 80]
   python -m cnv indice
   python -m cnv financieros [--max 150] [--solo CUIT] [--tiempo-max 1200]
+  python -m cnv avisos-pago [--max 200] [--solo CUIT] [--tiempo-max 900]
 """
 import argparse
 import dataclasses
@@ -12,6 +13,7 @@ import sys
 import time
 
 from . import almacen as alm
+from . import avisos_pago as avp
 from . import financieros as fin
 from . import resumenes as res
 from .descarga import Limites
@@ -40,6 +42,10 @@ def main(argv=None) -> int:
     f.add_argument("--max", type=int, default=150, help="maximo de documentos enviados al modelo por corrida (controla el costo)")
     f.add_argument("--solo", default=None, help="CUIT: procesa solo esa empresa")
     f.add_argument("--tiempo-max", type=int, default=1200, help="segundos; corta limpio y deja el resto para la proxima corrida")
+    ap = sub.add_parser("avisos-pago")
+    ap.add_argument("--max", type=int, default=200, help="maximo de avisos enviados al modelo por corrida (controla el costo)")
+    ap.add_argument("--solo", default=None, help="CUIT: procesa solo esa empresa")
+    ap.add_argument("--tiempo-max", type=int, default=900)
     a = p.parse_args(argv)
 
     almacen = alm.almacen_desde_entorno()
@@ -57,6 +63,18 @@ def main(argv=None) -> int:
         total = res.ejecutar(almacen, universo, anthropic.Anthropic(timeout=60.0), a.max, time.monotonic() + a.tiempo_max)
         print("TOTAL", total)
         print(f"indice global: {construir_indice_global(almacen, universo)} documentos")
+        return 0
+
+    if a.cmd == "avisos-pago":
+        if not os.environ.get("ANTHROPIC_API_KEY"):
+            print("falta ANTHROPIC_API_KEY")
+            return 2
+        import anthropic
+
+        empresas = [e for e in universo if not a.solo or e["cuit"] == a.solo.replace("-", "")]
+        total = avp.ejecutar(almacen, empresas, anthropic.Anthropic(timeout=120.0), a.max, time.monotonic() + a.tiempo_max)
+        print("TOTAL", total)
+        print(f"indice avisos de pago: {avp.construir_indice(almacen, universo)} pagos")
         return 0
 
     if a.cmd == "financieros":
