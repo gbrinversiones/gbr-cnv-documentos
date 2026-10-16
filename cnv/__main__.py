@@ -3,6 +3,7 @@
                      [--max-docs N] [--solo CUIT] [--max-paginas 400] [--max-caracteres 1500000] [--max-mb 80]
   python -m cnv indice
   python -m cnv financieros [--max 150] [--solo CUIT] [--tiempo-max 1200]
+  python -m cnv salud [--formato md|json] [--dias-silencio 60] [--hoy AAAA-MM-DD]   # informe de salud (solo lee)
   python -m cnv escaneados                       # cuenta los PDF escaneados segun los marcadores (solo lee)
   python -m cnv ocr [--max-docs N] [--tiempo-max 7200]   # OCR de los escaneados; requiere tesseract (ver cnv/ocr.py)
   python -m cnv clasificar [--max 500] [--tiempo-max 900]
@@ -21,6 +22,7 @@ from . import avisos_pago as avp
 from . import clasificacion as cla
 from . import escaneados as esc
 from . import ocr
+from . import salud
 from . import financieros as fin
 from . import resumenes as res
 from .descarga import Limites
@@ -50,6 +52,11 @@ def main(argv=None) -> int:
     f.add_argument("--solo", default=None, help="CUIT: procesa solo esa empresa")
     f.add_argument("--tiempo-max", type=int, default=1200, help="segundos; corta limpio y deja el resto para la proxima corrida")
     sub.add_parser("escaneados")
+    sa = sub.add_parser("salud")
+    sa.add_argument("--formato", choices=("md", "json"), default="md")
+    sa.add_argument("--dias-silencio", type=int, default=salud.DIAS_SILENCIO)
+    sa.add_argument("--hoy", default=None, help="AAAA-MM-DD (para reproducir un informe)")
+    sa.add_argument("--max-fallidos", type=int, default=30)
     oc = sub.add_parser("ocr")
     oc.add_argument("--max-docs", type=int, default=None, help="tope de documentos por empresa y por corrida")
     oc.add_argument("--tiempo-max", type=int, default=7200)
@@ -67,6 +74,11 @@ def main(argv=None) -> int:
     universo = cargar_universo()
     if a.cmd == "indice":
         print(f"indice global: {construir_indice_global(almacen, universo)} documentos")
+        return 0
+
+    if a.cmd == "salud":
+        informe = salud.calcular(almacen, salud.leer_universo_completo(), dt.date.fromisoformat(a.hoy) if a.hoy else None, a.dias_silencio)
+        print(json.dumps(informe, ensure_ascii=False, indent=1) if a.formato == "json" else salud.a_markdown(informe, a.max_fallidos))
         return 0
 
     if a.cmd == "escaneados":

@@ -123,3 +123,7 @@ jobs:
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: python -m cnv avisos-pago --max 200 --tiempo-max 900
+      - name: Salud de la base (resumen del job)
+        if: always()
+        continue-on-error: true
+        run: python -m cnv salud >> "$GITHUB_STEP_SUMMARY"
