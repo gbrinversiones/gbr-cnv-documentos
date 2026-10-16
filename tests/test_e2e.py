@@ -128,3 +128,38 @@ def test_un_corte_de_la_cnv_se_recupera_en_la_proxima_corrida(mundo):
     assert cli.main(["sync", "--desde", "2026-01-01"]) == 0
     m = {x["id"]: x for x in alm.leer_indice_empresa(mundo.almacen, EMP["cuit"])}["3490000"]
     assert m["texto_ok"] is True and "error" not in m
+
+
+# --- idempotencia con el reloj congelado en dos instantes distintos ------------------------------------
+
+def instantaneas(a):
+    """{ruta: bytes} de todo lo que hay en el almacen local."""
+    salida = {}
+    for raiz, _, nombres in os.walk(a.raiz):
+        for n in nombres:
+            ruta = os.path.join(raiz, n)
+            salida[os.path.relpath(ruta, a.raiz)] = open(ruta, "rb").read()
+    return salida
+
+
+def test_el_pipeline_no_cambia_ni_un_byte_si_el_reloj_avanza(mundo, monkeypatch):
+    """Regresion del test inestable: gzip.compress() ponia la hora en la cabecera, asi que una segunda pasada en otro segundo (o dia)
+    reescribia los indices con otros bytes. Se congela time.time() en dos instantes lejanos y no puede cambiar nada."""
+    import datetime as dt
+    import time
+
+    reloj = {"t": 1_760_000_000.0}                    # 2025-10-09
+    monkeypatch.setattr(time, "time", lambda: reloj["t"])
+    a = mundo.almacen
+    assert pipeline() == [0] * 6
+    antes = instantaneas(a)
+    escrituras = []
+    original = alm.AlmacenLocal.guardar
+    monkeypatch.setattr(alm.AlmacenLocal, "guardar", lambda self, nombre, datos: (escrituras.append(nombre), original(self, nombre, datos))[1])
+    reloj["t"] += 40 * 86_400 + 3_601                  # 40 dias y una hora despues
+    assert pipeline() == [0] * 6
+    despues = instantaneas(a)
+    assert despues == antes                                                    # ni un byte distinto en ningun archivo
+    indices = [n for n in escrituras if n.startswith("cnv/indice/") and n.count("/") == 2 and n.endswith(".gz")]
+    assert indices == []                                                       # y los indices globales/planos ni siquiera se vuelven a escribir
+    assert dt.date.fromtimestamp(reloj["t"]).year == 2025

@@ -8,8 +8,26 @@ Estructura del bucket:
   cnv/indice/financieros.json.gz        tabla plana empresa/periodo/cifras
 """
 import gzip
+import io
 import json
 import os
+
+
+def comprimir(datos: bytes) -> bytes:
+    """gzip DETERMINISTA (mtime=0): el mismo contenido da siempre los mismos bytes. gzip.compress() escribe la hora actual en la cabecera,
+    asi que dos corridas identicas daban archivos distintos (se resubian sin necesidad y las pruebas de idempotencia fallaban a veces)."""
+    buf = io.BytesIO()
+    with gzip.GzipFile(fileobj=buf, mode="wb", mtime=0) as f:
+        f.write(datos)
+    return buf.getvalue()
+
+
+def guardar_si_cambio(almacen, nombre: str, datos: bytes) -> bool:
+    """Escribe solo si el contenido es distinto del que ya esta (no resube lo que no cambio). True si escribio."""
+    if almacen.leer(nombre) == datos:
+        return False
+    almacen.guardar(nombre, datos)
+    return True
 
 
 class AlmacenLocal:
@@ -63,7 +81,7 @@ def almacen_desde_entorno():
 
 
 def guardar_texto(almacen, cuit: str, doc_id: str, texto: str) -> None:
-    almacen.guardar(f"cnv/texto/{cuit}/{doc_id}.txt.gz", gzip.compress(texto.encode("utf-8")))
+    almacen.guardar(f"cnv/texto/{cuit}/{doc_id}.txt.gz", comprimir(texto.encode("utf-8")))
 
 
 def leer_texto(almacen, cuit: str, doc_id: str) -> str | None:
