@@ -1,0 +1,42 @@
+# Control manual del universo (data/universo.csv) contra la CNV. No modifica el CSV: publica un informe en el resumen del job
+# y como artefacto. Se corre a mano porque requiere salir a la CNV (que desde GitHub Actions responde).
+name: Verificar universo CNV
+
+on:
+  workflow_dispatch:
+    inputs:
+      sugerir:
+        description: "Nombres a buscar en el autocompletado de la CNV, separados por ; (vacio = solo verificar)"
+        default: ""
+      verificar:
+        description: "Verificar los CUIT del CSV contra la pagina de la CNV"
+        type: boolean
+        default: true
+
+jobs:
+  universo:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Informe
+        env:
+          SUGERIR: ${{ github.event.inputs.sugerir }}
+          VERIFICAR: ${{ github.event.inputs.verificar }}
+        run: |
+          args=()
+          if [ "$VERIFICAR" = "true" ]; then args+=(--verificar --salida informes/universo.json); fi
+          IFS=';' read -ra nombres <<< "$SUGERIR"
+          for n in "${nombres[@]}"; do [ -n "$(echo "$n" | xargs)" ] && args+=(--sugerir "$(echo "$n" | xargs)"); done
+          python -m cnv universo "${args[@]}" | tee -a "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: informe-universo
+          path: informes/
+          if-no-files-found: ignore

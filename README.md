@@ -7,6 +7,7 @@ Descarga los documentos **públicos** que las empresas argentinas presentan en l
 - `python -m cnv sync`: lista los documentos de cada empresa, baja los que faltan, extrae el texto de los PDF (también los que vienen en ZIP) y guarda el texto y un índice por empresa. Tipos con texto: `hechos`, `estados_contables`, `prospectos` (prospectos, suplementos, avisos de suscripción y de resultado), `avisos_pago` (sección «Aviso de Pago») y `actas` (de directorio y de comisión fiscalizadora). Cualquier otra sección de la CNV queda como metadato (`t = "otros"`), sin texto.
 - `python -m cnv indice`: arma el índice global que usa el buscador.
 - `python -m cnv financieros`: extrae cifras clave de los estados contables ya descargados (ver abajo).
+- `python -m cnv universo`: verifica los CUIT del CSV contra la CNV y sugiere candidatos para empresas que faltan (ver abajo; no modifica el CSV).
 - `python -m cnv salud`: informe de salud de la base (solo lee; ver abajo).
 - `python -m cnv escaneados`: cuenta los PDF escaneados del universo según los marcadores (solo lee).
 - `python -m cnv ocr`: OCR opcional de los PDF escaneados (ver abajo).
@@ -88,6 +89,17 @@ CNV_OCR=1 python -m cnv ocr --solo 30546689979 --max-docs 3
 - **cobertura** de resúmenes, categorías, cifras de estados contables (con el estado de cada documento: `ok`, `escaneado`, `pendiente`…) y avisos de pago estructurados;
 - **empresas silenciosas:** activas (tuvieron algún documento en los últimos 365 días) pero sin documentos nuevos hace más de `--dias-silencio` días; empresas sin ningún documento; filas del universo sin CUIT o con CUIT que no pasa el dígito verificador.
 El workflow lo escribe en el resumen del job (`python -m cnv salud >> "$GITHUB_STEP_SUMMARY"`), con `continue-on-error`. «Último documento» incluye todas las secciones que lista la CNV, no solo las que se descargan.
+
+## Control del universo (`cnv/universo.py`)
+**No modifica `data/universo.csv`**: genera un informe y las altas/correcciones se hacen a mano.
+```
+python -m cnv universo --verificar --salida informes/universo.json     # confirma cada CUIT contra la CNV
+python -m cnv universo --sugerir "Transportadora de Gas del Sur" --sugerir "Oiltanking" --sugerir "Puentes" --sugerir "Vaca Muerta Oil Sur" --sugerir "C&C Medicals"
+python -m cnv universo --sugerir "Edesa" --confirmar                   # abre la página de cada candidato
+```
+- **`--verificar`:** abre la página pública de cada empresa (`Empresas/Empresa/{cuit}`) y compara la razón social del marcador «Resultados de búsqueda:» con la del CSV (sin acentos, mayúsculas ni sufijos societarios). Veredictos: `coincide`, `revisar_nombre_parcial`, `razon_social_distinta`, `cuit_no_existe_en_cnv` (la CNV muestra la portada genérica), `sin_razon_social_legible`, `cuit_invalido` (dígito verificador; no gasta consulta), `sin_cuit`, `error_de_red`; más CUIT y nombres duplicados. Reintentos con espera creciente, tope de tiempo y avance en `--salida` (reanudable; los `error_de_red` se reintentan).
+- **`--sugerir NOMBRE`:** consulta el autocompletado público (`Empresas/Autocomplete?term=`) con el nombre completo y versiones más cortas, lista los candidatos con CUIT, parecido, validez del CUIT y si ya están en el CSV.
+- Se puede correr desde GitHub (*Actions → Verificar universo CNV*): el informe queda en el resumen del job y como artefacto.
 
 ## Configuración (repo)
 - Secret `GCP_SA_KEY`: JSON de la cuenta de servicio con rol *Storage Object Admin* sobre el bucket.

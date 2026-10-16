@@ -3,6 +3,8 @@
                      [--max-docs N] [--solo CUIT] [--max-paginas 400] [--max-caracteres 1500000] [--max-mb 80]
   python -m cnv indice
   python -m cnv financieros [--max 150] [--solo CUIT] [--tiempo-max 1200]
+  python -m cnv universo --verificar [--salida informe.json] [--tiempo-max 1800] [--refrescar]   # no modifica el CSV
+  python -m cnv universo --sugerir NOMBRE [--sugerir OTRO ...] [--confirmar]
   python -m cnv salud [--formato md|json] [--dias-silencio 60] [--hoy AAAA-MM-DD]   # informe de salud (solo lee)
   python -m cnv escaneados                       # cuenta los PDF escaneados segun los marcadores (solo lee)
   python -m cnv ocr [--max-docs N] [--tiempo-max 7200]   # OCR de los escaneados; requiere tesseract (ver cnv/ocr.py)
@@ -23,6 +25,7 @@ from . import clasificacion as cla
 from . import escaneados as esc
 from . import ocr
 from . import salud
+from . import universo as uni
 from . import financieros as fin
 from . import resumenes as res
 from .descarga import Limites
@@ -51,6 +54,13 @@ def main(argv=None) -> int:
     f.add_argument("--max", type=int, default=150, help="maximo de documentos enviados al modelo por corrida (controla el costo)")
     f.add_argument("--solo", default=None, help="CUIT: procesa solo esa empresa")
     f.add_argument("--tiempo-max", type=int, default=1200, help="segundos; corta limpio y deja el resto para la proxima corrida")
+    un = sub.add_parser("universo")
+    un.add_argument("--verificar", action="store_true", help="confirma cada CUIT contra la pagina de la CNV y reporta discrepancias")
+    un.add_argument("--sugerir", action="append", default=[], metavar="NOMBRE", help="lista candidatos del autocompletado de la CNV (se puede repetir)")
+    un.add_argument("--confirmar", action="store_true", help="con --sugerir: abre la pagina de cada candidato para confirmar su razon social")
+    un.add_argument("--salida", default=None, help="archivo JSON del informe (tambien sirve de avance para retomar)")
+    un.add_argument("--tiempo-max", type=int, default=1800)
+    un.add_argument("--refrescar", action="store_true", help="ignora el avance guardado y verifica todo de nuevo")
     sub.add_parser("escaneados")
     sa = sub.add_parser("salud")
     sa.add_argument("--formato", choices=("md", "json"), default="md")
@@ -69,6 +79,18 @@ def main(argv=None) -> int:
     ap.add_argument("--solo", default=None, help="CUIT: procesa solo esa empresa")
     ap.add_argument("--tiempo-max", type=int, default=900)
     a = p.parse_args(argv)
+
+    if a.cmd == "universo":  # no usa el almacen: solo el CSV y la CNV
+        if not a.verificar and not a.sugerir:
+            print("indicar --verificar o --sugerir NOMBRE")
+            return 2
+        completo = salud.leer_universo_completo()
+        if a.verificar:
+            informe = uni.verificar(completo, ruta_avance=a.salida, hasta_t=time.monotonic() + a.tiempo_max, refrescar=a.refrescar)
+            print(uni.a_markdown_verificacion(informe))
+        for nombre in a.sugerir:
+            print(uni.a_markdown_sugerencias(uni.sugerir(nombre, completo, confirmar=a.confirmar)))
+        return 0
 
     almacen = alm.almacen_desde_entorno()
     universo = cargar_universo()
