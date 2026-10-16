@@ -7,6 +7,7 @@ Descarga los documentos **públicos** que las empresas argentinas presentan en l
 - `python -m cnv sync`: lista los documentos de cada empresa, baja los que faltan, extrae el texto de los PDF (también los que vienen en ZIP) y guarda el texto y un índice por empresa. Tipos con texto: `hechos`, `estados_contables`, `prospectos` (prospectos, suplementos, avisos de suscripción y de resultado), `avisos_pago` (sección «Aviso de Pago») y `actas` (de directorio y de comisión fiscalizadora). Cualquier otra sección de la CNV queda como metadato (`t = "otros"`), sin texto.
 - `python -m cnv indice`: arma el índice global que usa el buscador.
 - `python -m cnv financieros`: extrae cifras clave de los estados contables ya descargados (ver abajo).
+- `python -m cnv clasificar`: asigna una categoría cerrada (`k`) a cada hecho relevante (ver abajo).
 - `python -m cnv avisos-pago`: estructura los avisos de pago de ONs ya descargados (ver abajo).
 - El workflow `Sincronizar documentos CNV` corre todos los días (y se puede disparar a mano para cargas grandes).
 
@@ -57,10 +58,20 @@ export ANTHROPIC_API_KEY=...
 python -m cnv avisos-pago --max 50 --solo 30546689979
 ```
 
+## Categoría de los hechos relevantes (`cnv/clasificacion.py`)
+Cada hecho relevante con texto recibe `k` en el índice por empresa y en `cnv/indice/global.json.gz` (`null` si todavía no está clasificado o no es un hecho). Lista cerrada: `resultados`, `dividendos`, `recompra_acciones`, `recompra_on`, `emision_on`, `cambio_directorio`, `adquisicion_venta`, `hecho_judicial`, `convocatoria_asamblea`, `calificacion_riesgo`, `otro`.
+- **Modelo:** `claude-haiku-5-5`, esquema JSON con `enum` cerrado y una cita de 3 a 40 palabras. Una categoría fuera de la lista, o (salvo `otro`) sin cita literal en el título o el texto, **se descarta**: el hecho queda sin `k` y se cuenta el intento en `kx` (máx. 3).
+- **Idempotente:** `kv` guarda la versión del clasificador; solo se reclasifica si cambia. Los errores de red/API no gastan intento.
+- Los campos nuevos (`k`, `kv`, `kx`) solo se agregan; `r` (resumen) y el resto no cambian.
+```
+export ANTHROPIC_API_KEY=...
+python -m cnv clasificar --max 100
+```
+
 ## Configuración (repo)
 - Secret `GCP_SA_KEY`: JSON de la cuenta de servicio con rol *Storage Object Admin* sobre el bucket.
 - Variable `GCS_BUCKET`: nombre del bucket.
-- Secret `ANTHROPIC_API_KEY`: solo para `financieros`, `resumenes` y `avisos-pago`.
+- Secret `ANTHROPIC_API_KEY`: solo para `financieros`, `resumenes`, `clasificar` y `avisos-pago`.
 
 ## Desarrollo
 ```
