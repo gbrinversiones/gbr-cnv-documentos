@@ -109,7 +109,7 @@ python -m cnv universo --sugerir "Edesa" --confirmar                   # abre la
 ## Desarrollo
 ```
 pip install -r requirements.txt
-pytest
+python -m pytest -q --cov=cnv --cov-fail-under=90     # 274 pruebas, ~99% de cobertura; sin red ni claves
 DATOS_LOCAL=datos python -m cnv sync --desde 2026-09-01 --solo 30546689979 --max-docs 5
 ```
 

@@ -99,10 +99,11 @@ def _bajar_una_vez(guid: str, s, max_bytes: int) -> bytes | None:
 
 
 def descargar_bytes(guid: str, s=None, max_bytes: int = 80_000_000, intentos: int = INTENTOS_ADJUNTO,
-                    espera: float = ESPERA_BASE, hasta_t: float | None = None, dormir=time.sleep) -> bytes | None:
+                    espera: float = ESPERA_BASE, hasta_t: float | None = None, dormir=None) -> bytes | None:
     """Bytes del adjunto, o None si esta vacio. Reintenta fallos transitorios con espera creciente hasta `hasta_t`
     (reloj monotonico); si se agotan los intentos lanza ErrorDescarga con el ultimo motivo."""
     s = s or sesion()
+    dormir = dormir or time.sleep  # se resuelve al llamar (asi las pruebas pueden parchear time.sleep)
     ultimo = None
     for n in range(intentos):
         try:
@@ -170,7 +171,7 @@ def texto_de_pdf(pdf: bytes, max_paginas: int = 400) -> tuple:
     return r["texto"], r["paginas"]
 
 
-def texto_de_presentacion(url: str, s=None, limites: Limites | None = None, hasta_t: float | None = None, dormir=time.sleep) -> dict:
+def texto_de_presentacion(url: str, s=None, limites: Limites | None = None, hasta_t: float | None = None, dormir=None) -> dict:
     """Datos del adjunto de una presentacion; {} si no hay adjunto o ninguno se pudo bajar.
 
     {"texto","paginas","archivos","escaneado","truncado","fallos"}: `truncado` es None o
