@@ -96,7 +96,7 @@ def construir_indice_global(almacen, empresas: list) -> int:
     for e in empresas:
         for m in alm.leer_indice_empresa(almacen, e["cuit"]):
             if m.get("texto_ok"):
-                filas.append({k: m.get(k) for k in ("id", "c", "e", "f", "t", "s", "d", "u", "p", "n")})
+                filas.append({k: m.get(k) for k in ("id", "c", "e", "f", "t", "s", "d", "u", "p", "n", "r")})
     filas.sort(key=lambda m: (m["f"] or "", m["id"]), reverse=True)
     almacen.guardar("cnv/indice/global.json.gz", gzip.compress(json.dumps(filas, ensure_ascii=False, separators=(",", ":")).encode("utf-8")))
     return len(filas)

@@ -111,3 +111,45 @@ def test_ultima_informacion_no_pisa_la_seccion_que_tipifica():
     )
     docs = listado.parsear_listado(html)
     assert len(docs) == 1 and docs[0]["tipo"] == "hechos" and docs[0]["descripcion"] == "Resultados del tercer trimestre"
+
+
+def test_resumenes_pendientes_y_guardado(tmp_path):
+    from cnv import resumenes as res
+
+    a = alm.AlmacenLocal(str(tmp_path))
+    emp = {"empresa": "EMPRESA SA", "cuit": "30111111112"}
+    alm.guardar_indice_empresa(a, emp["cuit"], [
+        {"id": "2", "c": emp["cuit"], "e": "EMPRESA SA", "f": "2026-10-02", "t": "hechos", "d": "RECOMPRA", "texto_ok": True},
+        {"id": "1", "c": emp["cuit"], "e": "EMPRESA SA", "f": "2026-09-01", "t": "hechos", "d": "YA", "texto_ok": True, "r": "ya resumido"},
+        {"id": "3", "c": emp["cuit"], "e": "EMPRESA SA", "f": "2026-10-03", "t": "estados_contables", "d": "EECC", "texto_ok": True},
+    ])
+    alm.guardar_texto(a, emp["cuit"], "2", "[pagina 1]\nLa empresa informa la recompra de obligaciones negociables por US$ 5 millones.")
+
+    class Texto:
+        type = "text"
+        text = '"La empresa recompro ONs por US$ 5 millones."'
+
+    class Resp:
+        stop_reason = "end_turn"
+        content = [Texto()]
+
+    class Cliente:
+        class messages:  # noqa: N801
+            @staticmethod
+            def create(**kw):
+                assert "recompra" in kw["messages"][0]["content"]
+                return Resp()
+
+    assert [m["id"] for _, m in res.pendientes(a, [emp])] == ["2"]
+    t = res.ejecutar(a, [emp], Cliente(), 10)
+    assert t["resumidos"] == 1
+    assert {m["id"]: m.get("r") for m in alm.leer_indice_empresa(a, emp["cuit"])}["2"] == "La empresa recompro ONs por US$ 5 millones."
+    assert res.pendientes(a, [emp]) == []
+
+
+def test_limpiar_resumen_corta_y_saca_comillas():
+    from cnv import resumenes as res
+
+    assert res.limpiar_resumen('  "hola   mundo"  ') == "hola mundo"
+    largo = res.limpiar_resumen("palabra " * 100)
+    assert len(largo) <= res.MAX_CARACTERES_SALIDA and largo.endswith("\u2026")

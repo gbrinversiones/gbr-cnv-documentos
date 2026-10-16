@@ -12,6 +12,7 @@ import os
 
 from . import almacen as alm
 from . import financieros as fin
+from . import resumenes as res
 from .sincronizar import TIPOS_DEFECTO, cargar_universo, construir_indice_global, sincronizar_empresa
 
 
@@ -27,6 +28,9 @@ def main(argv=None) -> int:
     s.add_argument("--solo", default=None, help="CUIT: procesa solo esa empresa")
     s.add_argument("--trabajadores", type=int, default=3)
     sub.add_parser("indice")
+    rs = sub.add_parser("resumenes")
+    rs.add_argument("--max", type=int, default=300, help="maximo de hechos resumidos por corrida (controla el costo)")
+    rs.add_argument("--tiempo-max", type=int, default=1500)
     f = sub.add_parser("financieros")
     f.add_argument("--max", type=int, default=150, help="maximo de documentos enviados al modelo por corrida (controla el costo)")
     f.add_argument("--solo", default=None, help="CUIT: procesa solo esa empresa")
@@ -36,6 +40,17 @@ def main(argv=None) -> int:
     almacen = alm.almacen_desde_entorno()
     universo = cargar_universo()
     if a.cmd == "indice":
+        print(f"indice global: {construir_indice_global(almacen, universo)} documentos")
+        return 0
+
+    if a.cmd == "resumenes":
+        if not os.environ.get("ANTHROPIC_API_KEY"):
+            print("falta ANTHROPIC_API_KEY")
+            return 2
+        import anthropic
+
+        total = res.ejecutar(almacen, universo, anthropic.Anthropic(timeout=60.0), a.max, time.monotonic() + a.tiempo_max)
+        print("TOTAL", total)
         print(f"indice global: {construir_indice_global(almacen, universo)} documentos")
         return 0
 

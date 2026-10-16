@@ -73,3 +73,8 @@ jobs:
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: python -m cnv financieros --max 150 --tiempo-max 1200
+      - name: Resumir hechos relevantes nuevos (Claude Haiku, max 400 por corrida)
+        continue-on-error: true
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: python -m cnv resumenes --max 400 --tiempo-max 1500
