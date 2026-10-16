@@ -6,3 +6,4 @@ google-cloud-storage>=2.16
 pytest>=8.0
 cryptography>=42
 pytest-cov>=5.0
+fonttools>=4.50
