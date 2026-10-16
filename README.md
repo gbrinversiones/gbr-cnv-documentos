@@ -13,6 +13,7 @@ Descarga los documentos **públicos** que las empresas argentinas presentan en l
 - `python -m cnv escaneados`: cuenta los PDF escaneados del universo según los marcadores (solo lee).
 - `python -m cnv ocr`: OCR opcional de los PDF escaneados (ver abajo).
 - `python -m cnv clasificar`: asigna una categoría cerrada (`k`) a cada hecho relevante (ver abajo).
+- `python -m cnv ratios`: ratios por emisor y periodo desde las cifras verificadas (sin modelo; ver abajo).
 - `python -m cnv avisos-pago`: estructura los avisos de pago de ONs ya descargados (ver abajo).
 - El workflow `Sincronizar documentos CNV` corre todos los días (y se puede disparar a mano para cargas grandes).
 
@@ -38,7 +39,7 @@ Todo cuelga de `cnv/` en el bucket. Detalle campo por campo en el [diccionario d
 `cnv/texto/{cuit}/{doc_id}.txt.gz` · `cnv/texto/{cuit}/{doc_id}.ocr.txt.gz` · `cnv/indice/{cuit}.json` · `cnv/indice/global.json.gz` · `cnv/financieros/{cuit}.json` · `cnv/indice/financieros.json.gz` · `cnv/avisos_pago/{cuit}.json` · `cnv/indice/avisos_pago.json.gz` · `cnv/busqueda/{docs.json.gz, meta.json, s00..s63.json.gz}`
 
 ## Cifras de estados contables (`cnv/financieros.py`)
-Segunda etapa: de cada documento de tipo `estados_contables` con texto, saca periodo (cierre AAAA-MM-DD), tipo (anual/trimestral/semestral), si es acumulado, moneda y unidad, y las cifras `ventas`, `resultado_operativo`, `resultado_neto`, `activo_total`, `pasivo_total`, `patrimonio_neto`, `deuda_financiera` y `efectivo`.
+Segunda etapa: de cada documento de tipo `estados_contables` con texto, saca periodo (cierre AAAA-MM-DD), tipo (anual/trimestral/semestral), si es acumulado, moneda y unidad, y las cifras `ventas`, `resultado_operativo`, `resultado_neto`, `activo_total`, `pasivo_total`, `patrimonio_neto`, `deuda_financiera`, `efectivo` y, desde la versión 4 del extractor, `activo_corriente`, `pasivo_corriente`, `intereses` y `depreciaciones_amortizaciones` (insumos de los ratios). Los documentos procesados con la versión 3 siguen valiendo y **no se vuelven a pagar**; `python -m cnv financieros --completar-campos --max 150` los vuelve a pedir (≈ US$ 0,002 cada uno) para que sumen los campos nuevos.
 
 - **Recorte:** no se manda el documento entero. Se puntúan las páginas por palabras clave (estado de situación financiera, estado de resultados, nota de préstamos/ONs...) y se arma un recorte de máx. 40.000 caracteres (más la portada, para el periodo).
 - **Modelo:** `claude-haiku-5-5` con el SDK `anthropic`, salida JSON con esquema y `thinking` desactivado. Cada cifra viene con una cita textual de 8 a 25 palabras.
@@ -52,6 +53,20 @@ export ANTHROPIC_API_KEY=...   # no se guarda en ningún archivo
 python -m cnv financieros --max 20 --solo 30546689979 --tiempo-max 600
 ```
 `--max` es el tope de documentos enviados al modelo por corrida (costo acotado); el workflow lo corre al final del job `indice` con `--max 150` y `continue-on-error`. Solo procesa documentos ya descargados: hay que haber corrido `python -m cnv sync --tipos estados_contables`.
+
+## Ratios por emisor (`cnv/ratios.py`)
+`python -m cnv ratios` calcula, por emisor y periodo, a partir de las cifras **ya verificadas** de `cnv/financieros/{cuit}.json` (no usa el modelo, cuesta US$ 0) y escribe `cnv/indice/ratios.json.gz`.
+| Ratio | Fórmula | Condiciones |
+|---|---|---|
+| `liquidez_corriente` | activo_corriente / pasivo_corriente | pasivo corriente > 0 |
+| `endeudamiento` | pasivo_total / patrimonio_neto | patrimonio > 0 (con patrimonio negativo o cero queda `null`: `patrimonio_negativo` / `division_por_cero`) |
+| `deuda_ebitda` | deuda_financiera / (resultado_operativo + \|depreciaciones_amortizaciones\|) | solo periodos **anuales**; EBITDA > 0 |
+| `margen_neto` | resultado_neto / ventas | ventas > 0 |
+| `roe` | resultado_neto / patrimonio_neto (al cierre, no promedio) | solo periodos **anuales**; patrimonio > 0 |
+| `cobertura_intereses` | resultado_operativo / \|intereses\| | intereses ≠ 0 |
+- **Reglas:** todas las cifras de un ratio deben ser del mismo periodo (cierre, tipo y acumulado), la misma moneda, la misma unidad/escala y el mismo tipo de balance (consolidado/individual); si falta una cifra o algo no cierra, el ratio es `null` y `motivos[ratio]` dice por qué (`falta_cifra:<campos>`, `periodos_distintos`, `monedas_distintas`, `unidades_distintas`, `moneda_desconocida`, `division_por_cero`, `patrimonio_negativo`, `periodo_no_anual`, …). Nunca se estima, no se anualizan trimestres ni semestres (por eso `roe` y `deuda_ebitda` quedan `null` con `periodo_no_anual` en periodos parciales) y no se completa una cifra con la de otro documento. Un estado contable procesado antes de la versión 4 no tiene las cifras nuevas: su liquidez, deuda/EBITDA y cobertura quedan `null` (`falta_cifra`) hasta completarlo con `--completar-campos`.
+- **Trazabilidad:** cada periodo trae `doc` (el documento de origen en `cnv/financieros`), `insumos` (`valor` y `pagina` de cada cifra), `derivados` (`ebitda`) y `periodo_verificado` / `balance_coherente` tal como figuran en financieros. Si dos documentos traen el mismo periodo queda el más nuevo; consolidado e individual van por separado.
+- **Formato:** `{"version":1,"formulas":{...},"emisores":{cuit:{"empresa","periodos":[{periodo,tipo,acumulado,balance,moneda,unidad,escala,doc,periodo_verificado,balance_coherente,insumos,derivados,ratios,motivos}]}}}`, ordenado por cierre descendente, gzip determinista. El workflow lo corre en el job `indice` justo después de `financieros`.
 
 ## Avisos de pago de ONs (`cnv/avisos_pago.py`)
 Del documento de tipo `avisos_pago` saca, por cada pago: `emisor`, `clase`, `ticker` (si figura), `tipo_pago` (`interes` | `amortizacion` | `ambos`), `fecha_pago`, `monto_total`, `moneda` (`pesos` | `dolares`), `valor_residual` y `tasa`. Es el dato más confiable para saber qué se pagó realmente.
@@ -151,11 +166,14 @@ Una fila por documento **con texto**: `id, c, e, f, t, s, d, u, p, n, r, k` (los
 ### `cnv/financieros/{cuit}.json`
 `{"cuit", "periodos": [...], "procesados": {doc_id: {...}}}`.
 - `periodos[]`: `doc`, `empresa`, `fecha_presentacion`, `url`, `balance` (`consolidado`/`individual`/`desconocido`), `periodo` (cierre), `tipo` (`anual`/`trimestral`/`semestral`), `acumulado`, `moneda`, `unidad`, `escala` (1, 1000, 1000000), `periodo_verificado`, `unidad_verificada`, `balance_coherente` (activo ≈ pasivo + patrimonio, o `null`), `cifras` y `descartadas`.
-- `cifras{campo}` con `campo` ∈ `ventas, resultado_operativo, resultado_neto, activo_total, pasivo_total, patrimonio_neto, deuda_financiera, efectivo`: `{valor (tal cual figura), valor_abs (× escala), cita (literal), pagina}`. `descartadas[]`: `{campo, motivo}`.
+- `cifras{campo}` con `campo` ∈ `ventas, resultado_operativo, resultado_neto, activo_total, pasivo_total, patrimonio_neto, deuda_financiera, efectivo, activo_corriente, pasivo_corriente, intereses, depreciaciones_amortizaciones` (los 4 últimos desde la versión 4): `{valor (tal cual figura), valor_abs (× escala), cita (literal), pagina}`. `descartadas[]`: `{campo, motivo}`.
 - `procesados{doc_id}`: `v` (versión del extractor), `estado` (`ok`, `escaneado`, `sin_paginas_relevantes`, `no_es_estado_contable`, `sin_periodo`, `sin_cifras`, `otra_entidad`, `error`), `fecha`, y `intentos`/`error` si falló.
 
 ### `cnv/indice/financieros.json.gz`
-Una fila por empresa/periodo/tipo/acumulado/balance: `cuit, empresa, periodo, tipo, acumulado, balance, moneda, unidad, escala, doc, fecha, periodo_verificado, balance_coherente` + los 8 campos de cifras (valor tal cual figura o `null`).
+Una fila por empresa/periodo/tipo/acumulado/balance: `cuit, empresa, periodo, tipo, acumulado, balance, moneda, unidad, escala, doc, fecha, periodo_verificado, balance_coherente` + los 12 campos de cifras (valor tal cual figura o `null`).
+
+### `cnv/indice/ratios.json.gz`
+Ver «Ratios por emisor». Un objeto por cuit con la lista de periodos; cada ratio es un número o `null` con su motivo.
 
 ### `cnv/avisos_pago/{cuit}.json`
 `{"cuit", "pagos": [...], "procesados": {...}}`.
@@ -202,7 +220,7 @@ Modelo: `claude-haiku-5-5`, **US$ 0,10 por millón de tokens de entrada y US$ 0,
 ## Desarrollo
 ```
 pip install -r requirements.txt
-python -m pytest -q --cov=cnv --cov-fail-under=90     # 274 pruebas, ~99% de cobertura; sin red ni claves
+python -m pytest -q --cov=cnv --cov-fail-under=90     # ~400 pruebas, ~99% de cobertura; sin red ni claves
 DATOS_LOCAL=datos python -m cnv sync --desde 2026-09-01 --solo 30546689979 --max-docs 5
 ```
 

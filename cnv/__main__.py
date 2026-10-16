@@ -8,6 +8,7 @@
   python -m cnv salud [--formato md|json] [--dias-silencio 60] [--hoy AAAA-MM-DD]   # informe de salud (solo lee)
   python -m cnv escaneados                       # cuenta los PDF escaneados segun los marcadores (solo lee)
   python -m cnv ocr [--max-docs N] [--tiempo-max 7200]   # OCR de los escaneados; requiere tesseract (ver cnv/ocr.py)
+  python -m cnv ratios                            # ratios por emisor y periodo desde las cifras verificadas (sin modelo)
   python -m cnv busqueda [--tiempo-max 1500]      # indice de texto completo (BM25) para el buscador; reconstruye todo
   python -m cnv clasificar [--max 500] [--tiempo-max 900]
   python -m cnv avisos-pago [--max 200] [--solo CUIT] [--tiempo-max 900]
@@ -26,6 +27,7 @@ from . import busqueda as bus
 from . import clasificacion as cla
 from . import escaneados as esc
 from . import ocr
+from . import ratios as rat
 from . import salud
 from . import universo as uni
 from . import financieros as fin
@@ -57,6 +59,7 @@ def main(argv=None) -> int:
     f.add_argument("--max", type=int, default=150, help="maximo de documentos enviados al modelo por corrida (controla el costo)")
     f.add_argument("--solo", default=None, help="CUIT: procesa solo esa empresa")
     f.add_argument("--tiempo-max", type=int, default=1200, help="segundos; corta limpio y deja el resto para la proxima corrida")
+    f.add_argument("--completar-campos", action="store_true", help="vuelve a pedir (gasta modelo) los estados ya procesados con una version anterior para que sumen los campos nuevos")
     un = sub.add_parser("universo")
     un.add_argument("--verificar", action="store_true", help="confirma cada CUIT contra la pagina de la CNV y reporta discrepancias")
     un.add_argument("--sugerir", action="append", default=[], metavar="NOMBRE", help="lista candidatos del autocompletado de la CNV (se puede repetir)")
@@ -74,6 +77,7 @@ def main(argv=None) -> int:
     oc.add_argument("--max-docs", type=int, default=None, help="tope de documentos por empresa y por corrida")
     oc.add_argument("--tiempo-max", type=int, default=7200)
     oc.add_argument("--solo", default=None, help="CUIT: procesa solo esa empresa")
+    sub.add_parser("ratios")
     bq = sub.add_parser("busqueda")
     bq.add_argument("--tiempo-max", type=int, default=1500, help="segundos; si no alcanza NO se publica nada (el indice anterior sigue valiendo)")
     cl = sub.add_parser("clasificar")
@@ -148,6 +152,11 @@ def main(argv=None) -> int:
         print(f"indice global: {construir_indice_global(almacen, universo)} documentos")
         return 0
 
+    if a.cmd == "ratios":
+        r = rat.construir(almacen, universo)
+        print("TOTAL", r)
+        return 0
+
     if a.cmd == "busqueda":
         r = bus.construir(almacen, universo, time.monotonic() + a.tiempo_max)
         print("TOTAL", r)
@@ -191,7 +200,7 @@ def main(argv=None) -> int:
 
         empresas = [e for e in universo if not a.solo or e["cuit"] == a.solo.replace("-", "")]
         cliente = anthropic.Anthropic(timeout=120.0)
-        total = fin.ejecutar(almacen, empresas, cliente, a.max, time.monotonic() + a.tiempo_max)
+        total = fin.ejecutar(almacen, empresas, cliente, a.max, time.monotonic() + a.tiempo_max, a.completar_campos)
         print("TOTAL", total)
         print(f"indice financieros: {fin.construir_indice_financieros(almacen, universo)} periodos")
         return 0

@@ -245,5 +245,5 @@ def construir_indice_global(almacen, empresas: list) -> int:
                     fila["oc"] = m["ocr"]
                 filas.append(fila)
     filas.sort(key=lambda m: (m["f"] or "", m["id"]), reverse=True)
-    almacen.guardar("cnv/indice/global.json.gz", gzip.compress(json.dumps(filas, ensure_ascii=False, separators=(",", ":")).encode("utf-8")))
+    almacen.guardar("cnv/indice/global.json.gz", alm.comprimir(json.dumps(filas, ensure_ascii=False, separators=(",", ":")).encode("utf-8")))
     return len(filas)

@@ -315,7 +315,7 @@ def construir_indice(almacen, empresas: list) -> int:
             fila["ambiguo"] = sorted(c for c in CAMPOS_NUMERICOS if c in p and p[c].get("ambiguo")) or None
             filas.append(fila)
     filas.sort(key=lambda f: (f["fecha_pago"], f["cuit"]), reverse=True)
-    almacen.guardar("cnv/indice/avisos_pago.json.gz", gzip.compress(json.dumps(filas, ensure_ascii=False, separators=(",", ":")).encode("utf-8")))
+    almacen.guardar("cnv/indice/avisos_pago.json.gz", alm.comprimir(json.dumps(filas, ensure_ascii=False, separators=(",", ":")).encode("utf-8")))
     return len(filas)
 
 
