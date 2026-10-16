@@ -1,0 +1,73 @@
+ticker,emisor,descripcion,vence,cuit,fuente_cuit
+ARC1O,Aeropuertos Argentina 2000,Aeropuertos Argentina 2000 S.A. Serie 2021 Clase 1 - Dólares,2031-08-01,30696170580,universo
+CAC5O,Capex,Capex S.A. - Clase V - Dólares,2028-08-25,30629827060,universo
+CS38O,Cresud,Cresud S.A.C.I.F y A - Clase XXXVIII - Dólares,2026-03-03,30509300700,manual (coinciden universo.csv y cnv_cuits_emisores)
+CS44O,Cresud,Cresud S.A.C.I.F. y A. - Clase XLIV - Dólares,2027-01-17,30509300700,universo
+CS47O,Cresud,Cresud S.A.I.F.A. - Clase XLVII - Dólares,2028-11-15,30509300700,universo
+CS49O,Cresud,Cresud S.A.C.I.F. y A. - Clase XLIX - Dolares,2027-09-02,30509300700,universo
+DNC5O,Edenor,Empresa Distribuidora y Comercializadora Norte S.A. - Clase 5 - Dólares,2028-08-05,30655116202,universo
+DNC7O,Edenor,Empresa Distribuidora y Comercializadora Norte S.A. - Clase 7 - Dólares,2030-10-24,30655116202,universo
+EAC3O,MSU Green Energy,MSU Green Energy S.A.U. - Clase 3 - Dólares,2028-12-20,30714155128,universo
+GNCXO,Genneia,Genneia S.A. Clase XXXI - Dólares,2027-09-02,30665234114,universo
+IRCFO,IRSA,IRSA I.R.S.A. Clase XIV - Dolares,2028-06-22,30525322749,cnv_cuits_emisores
+IRCLO,IRSA,IRSA Inversiones y Representaciones S.A - Clase XX - Dólares,2026-06-10,30525322749,manual (coinciden universo.csv y cnv_cuits_emisores)
+IRCNO,IRSA,IRSA Inversiones y Representaciones S.A. - Clase XXII - Dólares,2027-10-23,30525322749,cnv_cuits_emisores
+IRCOO,IRSA,IRSA Inversiones y Representaciones S.A. - Clase XXIII - Dólares,2029-10-23,30525322749,cnv_cuits_emisores
+IRCPO,IRSA,IRSA Inversiones y Representaciones S.A. - Clase XXIV - Dólares,2035-03-31,30525322749,cnv_cuits_emisores
+LOC5O,Loma Negra,Loma Negra Compañia Industrial Argentina S.A. - Clase 5 - Dolares,2027-07-24,30500530851,universo
+MGC9O,Pampa Energia,Pampa Energía S.A. - Clase IX,2026-12-08,30526552659,universo
+MGCLO,Pampa Energia,Pampa Argentina S.A - Clase 20 - Dólares,2026-03-26,30526552659,manual (coinciden universo.csv y cnv_cuits_emisores)
+MGCMO,Pampa Energia,Pampa Energía S.A. - Clase 21 - Dólares,2031-09-10,30526552659,universo
+MGCOO,Pampa Energia,Pampa Energía S.A. - Clase 23 - Dólares,2034-12-16,30526552659,universo
+MGCRO,Pampa Energia,Pampa Energia S.A. - Clase 26 - Dolares,2037-11-14,30526552659,universo
+MR35O,Generacion Mediterranea,GEMSA y CTRSA - Clase XXXV - Dólares,2027-08-28,30682434720,universo
+MR39O,Generacion Mediterranea,GEMSA y CTRSA - Clase XXXIX - Serie B - Dólares,2031-11-01,30682434720,universo
+MRCAO,Generacion Mediterranea,Generación Mediterránea S.A y Central Térmica Roca S.A. Clase X - Dolares,2027-12-01,30682434720,universo
+MTCGO,Mastellone Hermanos,Mastellone Hermanos S.A. Clase G - Dólares,2026-06-30,30547242331,manual (coinciden universo.csv y cnv_cuits_emisores)
+NPCAO,Central Puerto,Central Puerto S.A. - Clase A - Dólares,2026-03-14,33650305499,universo
+OT42O,Oiltanking Ebytem (OTAmerica),Oiltanking Ebytem S.A. - Serie IV - Clase 2 - Dólares,2030-01-17,30658839523,cnv_cuits_emisores
+OTS2O,Oiltanking Ebytem (OTAmerica),Oiltanking Ebytem S.A - Serie 2,2027-04-24,30658839523,cnv_cuits_emisores
+OTS3O,Oiltanking Ebytem (OTAmerica),Oiltanking S.A. - Serie III - Dólares,2028-11-01,30658839523,cnv_cuits_emisores
+PECGO,Tango Energy (ex Petrolera Aconcagua),Petrolera Aconcagua Energía S.A. - Clase XV - Dólares,2028-10-28,30714814229,universo
+PLC1O,Pluspetrol,Pluspetrol S.A. - Clase 1 - Dólares,2028-01-27,30678224010,universo
+PLC2O,Pluspetrol,Pluspetrol S.A. - Clase 2 - Dólares,2030-01-27,30678224010,universo
+PLC4O,Pluspetrol,Pluspetrol S.A. - Clase 4 - Dolares,2032-05-30,30678224010,universo
+PLC5O,Pluspetrol,Pluspetrol S.A. - Clase 5 - Dolares,2031-05-18,30678224010,universo
+PLC6O,Pluspetrol,Pluspetrol S.A. - Clase 6 - Dolares,2029-02-27,30678224010,universo
+PN35O,Pan American Energy,Pan American Energy S.L. Sucursal Argentina - Clase 35 - Dólares,2029-09-27,30695542476,universo
+PN36O,Pan American Energy,Pan American Energy S.L. Clase 36 - Dolares,2031-11-13,30695542476,universo
+PN37O,Pan American Energy,Pan American Energy S.L. Clase 37 - Dólares,2028-11-13,30695542476,universo
+PNDCO,Pan American Energy,Pan American Energy S.L. Clase 12 - Dólares,2027-04-30,30695542476,universo
+PNXCO,Pan American Energy,Pan American Energy S.L. - Clase 31 - Dólares,2032-04-30,30695542476,universo
+PQCSO,Petroquimica Comodoro Rivadavia,Petroquímica Comodoro Rivadavia S.A. - Clase S - Dólares,2031-02-17,30563598111,universo
+RUCDO,MSU Energy,MSU Energy S.A. - Clase XII - Serie B - Dólares,2030-12-05,30714378402,universo
+SNSBO,S.A. San Miguel A.G.I.C.I y F.,S.A. San Miguel A.G.I.C.I y F. - Clase XI - Dólares,2026-10-14,30511190238,universo
+T641O,Tarjeta Naranja,Tarjeta Naranja S.A.U. - Clase LXIV - Serie I - Dólares,2027-04-30,30685376349,universo
+TLC1O,Telecom Argentina,ON CLASE 1 TELECOM ARGENTINA,2026-07-18,30639453738,manual (coinciden universo.csv y cnv_cuits_emisores)
+TLCMO,Telecom Argentina,Telecom Argentina - Clase 21 - Dólares,2031-07-18,30639453738,universo
+TLCOO,Telecom Argentina,Telecom Argentina S.A. - Clase 23 - Dolares,2028-11-28,30639453738,universo
+TLCPO,Telecom Argentina,Telecom Argentina S.A. - Clase 24 - Dólares,2033-05-28,30639453738,universo
+TLCTO,Telecom Argentina,Telecom Argentina S.A. - Clase 27 - Dolares,2036-01-20,30639453738,universo
+TSC3O,TGS,Transportadora de Gas del Sur S.A - Clase 3 - Dólares,2031-07-24,30657862068,universo
+TTC9O,Tecpetrol,Tecpretol S.A. - Clase 9 - Dólares,2029-10-24,30592665472,universo
+TTCAO,Tecpetrol,TECPETROL S.A. - Clase 10 - Dólares,2033-01-22,30592665472,universo
+VSCNO,Vista Energy,Vista Energy Argentina S.A.U - Clase XXII - Dólares,2026-06-05,33515950899,manual (coinciden universo.csv y cnv_cuits_emisores)
+VSCRO,Vista Energy,Vista Energy Argentina S.A.U. - Clase XXVI - Dólares,2031-10-10,33515950899,universo
+VSCTO,Vista Energy,Vista Energy Argentina S.A.U. - Clase XXVII - Dólares,2035-12-10,33515950899,universo
+VSCVO,Vista Energy,Vista Energy Argentina S.A.U. - Clase XXIX - Dólares,2033-06-10,33515950899,universo
+VSCXO,Vista Energy,Vista Energy Argentina S.A.U. - Clase XXXI,2038-04-08,33515950899,universo
+YFCJO,YPF Energia Electrica,YPF Energía Eléctrica S.A. - Clase XVIII - Dólares,2032-10-16,30714128309,universo
+YFCKO,YPF Energia Electrica,YPF Energía Eléctrica S.A. - Clase XIX - Dólares,2026-11-22,30714128309,universo
+YM34O,YPF,YPF Sociedad Anónima - Clase XXXIV - Dólares,2034-01-17,30546689979,universo
+YM37O,YPF,YPF Sociedad Anónima - Clase XXXVII - Dólares,2027-05-07,30546689979,universo
+YM38O,YPF,YPF Sociedad Anonima - Clase XXXVIII - Dolares,2027-07-22,30546689979,universo
+YM39O,YPF,YPF Sociedad Anonima - Clase XXXIX - Dolares,2030-07-22,30546689979,universo
+YM42O,YPF,YPF S.A. - Clase XLII - Dolares,2029-03-02,30546689979,universo
+YMC1O,YPF,YPF VTO.27/06/2029,2029-06-27,30546689979,universo
+YMCHO,YPF,YPF S.A. Clase XVI - Dólares,2026-02-12,30546689979,manual (coinciden universo.csv y cnv_cuits_emisores)
+YMCIO,YPF,YPF S.A. Clase XVII - Dólares,2029-06-30,30546689979,universo
+YMCJO,YPF,YPF S.A. Clase XVIII - Dólares,2033-09-30,30546689979,universo
+YMCQO,YPF,YPF S.A. - Clase XXV - Dólares,2026-02-13,30546689979,universo
+YMCXO,YPF,YPF S.A. - Clase XXXI - Dólares,2031-09-11,30546689979,universo
+YMCYO,YPF,YPF S.A. - Clase XXXII - Dólares,2028-10-10,30546689979,universo
+YMCZO,YPF,YPF S.A. - Clase XXXIII - Dólares,2028-10-10,30546689979,universo
