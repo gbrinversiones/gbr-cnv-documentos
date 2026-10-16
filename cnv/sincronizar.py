@@ -30,7 +30,8 @@ def _con_reintentos(fn, intentos: int = 3, espera: float = 4.0):
             return fn()
         except Exception as error:  # la CNV responde lento o corta a veces: se reintenta con espera creciente
             ultimo = error
-            time.sleep(espera * (n + 1))
+            if n < intentos - 1:  # despues del ultimo intento no tiene sentido esperar
+                time.sleep(espera * (n + 1))
     raise ultimo
 
 
