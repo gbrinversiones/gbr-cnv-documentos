@@ -99,6 +99,9 @@ def normalizar(s: str) -> str:
     s = unicodedata.normalize("NFKD", s)
     s = "".join(c for c in s if not unicodedata.combining(c)).lower()
     s = re.sub(r"[‐-―−]", "-", s)
+    # comillas tipograficas/rectas y caracteres invisibles: el modelo y el PDF los escriben distinto. Los separadores de miles
+    # y decimales NO se tocan: "12.5" y "125" siguen siendo distintos.
+    s = re.sub(r"[\"'“”„‟‘’‚`´«»\u200b\u200c\u200d\u2060\ufeff\u00ad]", "", s)
     return re.sub(r"\s+", "", s)
 
 

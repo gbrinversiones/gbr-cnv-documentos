@@ -1,0 +1,29 @@
+[pagina 1]
+AVISO DE PAGO DE SERVICIOS
+OBLIGACIONES NEGOCIABLES
+Comision Nacional de Valores
+Emisor:
+Denominacion de la Obligacion Negociable:
+Clase / Serie:
+Codigo ISIN:
+Codigo de negociacion:
+Moneda de denominacion:
+Moneda de pago:
+Se comunica a los tenedores de las Obligaciones Negociables que se pondra a disposicion el pago de servicios de:
+Intereses
+Amortizacion
+Fecha de pago:
+Periodo de devengamiento de intereses desde:
+Periodo de devengamiento de intereses hasta:
+Tasa de interes aplicable:
+Monto total a pagar:
+Valor residual luego del pago:
+Entidad pagadora:
+Domicilio de pago:
+Horario de atencion:
+[pagina 2]
+Informacion adicional
+Observaciones:
+Firma del responsable:
+Aclaracion:
+Cargo:

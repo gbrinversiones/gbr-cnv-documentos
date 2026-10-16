@@ -29,7 +29,8 @@ from . import universo as uni
 from . import financieros as fin
 from . import resumenes as res
 from .descarga import Limites
-from .sincronizar import TIPOS_DEFECTO, TIPOS_TEXTO, cargar_universo, reprocesar_escaneados, construir_indice_global, sincronizar_empresa
+from .sincronizar import (TIPOS_DEFECTO, TIPOS_TEXTO, cargar_universo, construir_indice_global, ocr_formularios, reprocesar_escaneados,
+                          sincronizar_empresa)
 
 
 def main(argv=None) -> int:
@@ -78,6 +79,7 @@ def main(argv=None) -> int:
     ap.add_argument("--max", type=int, default=200, help="maximo de avisos enviados al modelo por corrida (controla el costo)")
     ap.add_argument("--solo", default=None, help="CUIT: procesa solo esa empresa")
     ap.add_argument("--tiempo-max", type=int, default=900)
+    ap.add_argument("--contar-formularios", action="store_true", help="solo lee: cuenta los avisos de pago que son formularios sin valores y como quedaron")
     a = p.parse_args(argv)
 
     if a.cmd == "universo":  # no usa el almacen: solo el CSV y la CNV
@@ -124,6 +126,9 @@ def main(argv=None) -> int:
                 total[k] += r[k]
             if r["ocr"] or r["sin_texto"]:
                 print(f"  {e['empresa']}: {r['ocr']} con texto por OCR, {r['sin_texto']} sin texto", flush=True)
+            f = ocr_formularios(almacen, e, Limites.desde_entorno(), limite, a.max_docs)
+            if f["leidos"] or f["sin_texto"]:
+                print(f"  {e['empresa']}: {f['leidos']} formularios de aviso de pago leidos por OCR, {f['sin_texto']} sin valores legibles", flush=True)
         print("TOTAL", total)
         print(f"indice global: {construir_indice_global(almacen, universo)} documentos")
         return 0
@@ -148,6 +153,10 @@ def main(argv=None) -> int:
         total = cla.ejecutar(almacen, universo, anthropic.Anthropic(timeout=60.0), a.max, time.monotonic() + a.tiempo_max)
         print("TOTAL", total)
         print(f"indice global: {construir_indice_global(almacen, universo)} documentos")
+        return 0
+
+    if a.cmd == "avisos-pago" and a.contar_formularios:
+        print(json.dumps(avp.contar_formularios(almacen, [e for e in universo if not a.solo or e["cuit"] == a.solo.replace("-", "")]), ensure_ascii=False, indent=1))
         return 0
 
     if a.cmd == "avisos-pago":

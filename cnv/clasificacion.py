@@ -9,9 +9,9 @@ Campos que agrega al indice por empresa (solo agrega): k (categoria), kv (versio
 """
 import re
 import time
+import unicodedata
 
 from . import almacen as alm
-from .financieros import normalizar
 from .modelo import pedir_json
 
 VERSION = "1"
@@ -50,6 +50,13 @@ cita: entre 3 y 40 palabras COPIADAS LITERALMENTE del titulo o del texto que jus
 No inventes ni infieras mas alla del texto."""
 
 
+def normalizar(s: str) -> str:
+    """Solo letras y numeros, en minuscula y sin acentos: ignora comillas tipograficas, guiones, espacios dobles, saltos de linea
+    y puntuacion. Alcanza para una etiqueta (la categoria no depende de ningun numero); las cifras usan una comparacion mas estricta."""
+    t = unicodedata.normalize("NFKD", str(s or ""))
+    return re.sub(r"[^a-z0-9]", "", "".join(c for c in t if not unicodedata.combining(c)).lower())
+
+
 def verificar(categoria, cita, titulo: str, texto: str) -> tuple:
     """(categoria_valida | None, motivo | None)."""
     if not isinstance(categoria, str) or categoria not in CATEGORIAS:
@@ -67,11 +74,21 @@ def verificar(categoria, cita, titulo: str, texto: str) -> tuple:
     return None, "cita_no_esta_en_documento"
 
 
-def clasificar(cliente, empresa: str, titulo: str, texto: str) -> tuple:
-    """(categoria | None, motivo | None). Lanza si el modelo falla (el llamador lo cuenta como error de red/API)."""
+def clasificar(cliente, empresa: str, titulo: str, texto: str, stats: dict | None = None) -> tuple:
+    """(categoria | None, motivo | None). Lanza si el modelo falla (el llamador lo cuenta como error de red/API).
+    Si la cita no figura en el documento se le pide UNA vez mas que copie un fragmento mas corto; recien ahi se descarta."""
     entrada = re.sub(r"\[pagina \d+\]", " ", texto)[:MAX_CARACTERES_ENTRADA]
-    r = pedir_json(cliente, INSTRUCCIONES, f"Empresa: {empresa}\nTitulo en la CNV: {titulo}\n\nTEXTO:\n{entrada}", ESQUEMA, max_tokens=300)
-    return verificar(r.get("categoria"), r.get("cita"), titulo, texto)
+    pedido = f"Empresa: {empresa}\nTitulo en la CNV: {titulo}\n\nTEXTO:\n{entrada}"
+    r = pedir_json(cliente, INSTRUCCIONES, pedido, ESQUEMA, max_tokens=300)
+    categoria, motivo = verificar(r.get("categoria"), r.get("cita"), titulo, texto)
+    if motivo != "cita_no_esta_en_documento":
+        return categoria, motivo
+    if stats is not None:
+        stats["reintentos"] = stats.get("reintentos", 0) + 1
+    aviso = (f"AVISO: la cita que devolviste ({str(r.get('cita'))[:200]!r}) NO figura en el documento. Elegi la categoria de nuevo y copia, "
+             f"caracter por caracter, un fragmento MAS CORTO (entre 3 y 15 palabras) que si este en el texto o en el titulo.")
+    r2 = pedir_json(cliente, INSTRUCCIONES, pedido, ESQUEMA, max_tokens=300, aviso=aviso)
+    return verificar(r2.get("categoria"), r2.get("cita"), titulo, texto)
 
 
 def pendientes(almacen, empresas: list) -> list:
@@ -91,7 +108,7 @@ def pendientes(almacen, empresas: list) -> list:
 
 
 def ejecutar(almacen, empresas: list, cliente, max_docs: int = 500, hasta_t: float | None = None) -> dict:
-    total = {"clasificados": 0, "descartados": 0, "errores": 0, "pendientes": 0}
+    total = {"clasificados": 0, "descartados": 0, "errores": 0, "pendientes": 0, "reintentos": 0}
     pend = pendientes(almacen, empresas)
     por_empresa = {}
     llamadas = 0
@@ -110,7 +127,7 @@ def ejecutar(almacen, empresas: list, cliente, max_docs: int = 500, hasta_t: flo
                 continue
             llamadas += 1
             try:
-                categoria, motivo = clasificar(cliente, e["empresa"], m.get("d", ""), texto)
+                categoria, motivo = clasificar(cliente, e["empresa"], m.get("d", ""), texto, total)
             except Exception as error:  # red o API: se reintenta en la proxima corrida, sin gastar un intento "de contenido"
                 total["errores"] += 1
                 print(f"  {e['empresa']} #{m['id']}: error {type(error).__name__}", flush=True)

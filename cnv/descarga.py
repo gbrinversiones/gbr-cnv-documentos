@@ -76,6 +76,29 @@ def adjuntos(html: str) -> list:
     return salida
 
 
+_PROPIEDADES_SERIE = (("d", "DescripcionDeLaSerieIndividual"), ("id", "IDSerieIndividual"), ("obs", "Observaciones"))
+
+
+def metadatos_serie(html: str) -> dict:
+    """{"d","id","obs"} con lo que la pagina de la presentacion declara de la serie (DescripcionDeLaSerieIndividual, IDSerieIndividual,
+    Observaciones). Es metadata publica de la CNV, no texto del documento: se guarda aparte y nunca reemplaza una cita verificada.
+    Acepta el valor como atributo (<propiedad Clave="...">), como par nombre/valor o como JSON; las que no estan se omiten."""
+    salida = {}
+    for corto, clave in _PROPIEDADES_SERIE:
+        k = re.escape(clave)
+        for patron in (rf'\b{k}\s*=\s*"([^"]*)"', rf"\b{k}\s*=\s*'([^']*)'",
+                       rf'<propiedad[^>]*\b(?:nombre|name|id)\s*=\s*"{k}"[^>]*>(.*?)</propiedad>',
+                       rf'name\s*=\s*"{k}"[^>]*\bvalue\s*=\s*"([^"]*)"', rf'value\s*=\s*"([^"]*)"[^>]*name\s*=\s*"{k}"',
+                       rf'"{k}"\s*:\s*"((?:[^"\\]|\\.)*)"'):
+            m = re.search(patron, html, re.S | re.I)
+            if m:
+                valor = " ".join(re.sub(r"<[^>]+>", " ", html_lib.unescape(m.group(1))).split())[:200]
+                if valor:
+                    salida[corto] = valor
+                    break
+    return salida
+
+
 def _bajar_una_vez(guid: str, s, max_bytes: int) -> bytes | None:
     """Un intento. None si el adjunto esta vacio (no tiene sentido reintentar); ErrorDescarga si se corto."""
     try:
@@ -240,7 +263,30 @@ def texto_de_presentacion(url: str, s=None, limites: Limites | None = None, hast
     texto = "\n\n".join(p for p in partes if p)
     if not texto.strip() and not partes:
         return {"fallos": fallos} if fallos else {}
-    return {"texto": texto, "paginas": paginas, "archivos": nombres, "truncado": truncado, "fallos": fallos,
+    return {"texto": texto, "paginas": paginas, "archivos": nombres, "truncado": truncado, "fallos": fallos, "serie": metadatos_serie(r.text),
             # escaneado: el texto que quedo es (casi) solo las marcas de pagina; es el marcador que usan el OCR y la salud de la base
             "escaneado": ocr.necesita_ocr(texto, leidas_total),
             "ocr": ocr_paginas, "ocr_intentado": ocr_intentado, "ocr_error": ocr_error}
+
+
+def pdfs_de_presentacion(url: str, s=None, limites: Limites | None = None, hasta_t: float | None = None, dormir=None) -> dict:
+    """{"pdfs": [(nombre, bytes)], "fallos": [...]} de una presentacion: los mismos adjuntos que texto_de_presentacion, sin extraer texto.
+    Sirve para volver a procesar un PDF (OCR) sin repetir la logica de reintentos."""
+    s = s or sesion()
+    limites = limites or Limites()
+    hasta_t = min(hasta_t, time.monotonic() + TIEMPO_MAX_DOCUMENTO) if hasta_t else time.monotonic() + TIEMPO_MAX_DOCUMENTO
+    r = s.get(url, timeout=120)
+    r.raise_for_status()
+    r.encoding = "utf-8"
+    pdfs, fallos = [], []
+    for a in adjuntos(r.text)[:MAX_ADJUNTOS]:
+        try:
+            contenido = descargar_bytes(a["guid"], s, limites.mb * 1_000_000, hasta_t=hasta_t, dormir=dormir)
+        except ErrorDescarga as error:
+            fallos.append({"archivo": a["nombre"], "motivo": error.motivo})
+            continue
+        encontrados = pdfs_de(contenido or b"")
+        if not encontrados:
+            fallos.append({"archivo": a["nombre"], "motivo": "adjunto vacio" if contenido is None else "no es PDF ni ZIP con PDF"})
+        pdfs += [(a["nombre"] if n == "documento.pdf" else n, b) for n, b in encontrados]
+    return {"pdfs": pdfs, "fallos": fallos}

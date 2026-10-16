@@ -2,6 +2,7 @@
 
 Estructura del bucket:
   cnv/texto/{cuit}/{doc_id}.txt.gz      texto completo del documento (con marcas [pagina N])
+  cnv/texto/{cuit}/{doc_id}.ocr.txt.gz  texto leido por OCR de un formulario de aviso de pago (solo ese caso; ver cnv/avisos_pago.py)
   cnv/indice/{cuit}.json                metadatos de todos los documentos de la empresa
   cnv/indice/global.json.gz             metadatos de todas las empresas (lo que busca el explorador)
   cnv/financieros/{cuit}.json           cifras clave por periodo, con cita textual (ver cnv/financieros.py)
@@ -96,3 +97,12 @@ def guardar_indice_empresa(almacen, cuit: str, docs: list) -> None:
 def leer_indice_empresa(almacen, cuit: str) -> list:
     crudo = almacen.leer(f"cnv/indice/{cuit}.json")
     return json.loads(crudo) if crudo else []
+
+
+def guardar_texto_ocr(almacen, cuit: str, doc_id: str, texto: str) -> None:
+    almacen.guardar(f"cnv/texto/{cuit}/{doc_id}.ocr.txt.gz", gzip.compress(texto.encode("utf-8")))
+
+
+def leer_texto_ocr(almacen, cuit: str, doc_id: str) -> str | None:
+    crudo = almacen.leer(f"cnv/texto/{cuit}/{doc_id}.ocr.txt.gz")
+    return gzip.decompress(crudo).decode("utf-8") if crudo else None

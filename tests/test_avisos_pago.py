@@ -212,7 +212,7 @@ def test_ejecutar_guarda_detalle_e_indice_plano_y_es_idempotente(tmp_path):
     fila = json.loads(gzip.decompress(a.leer("cnv/indice/avisos_pago.json.gz")))[0]
     assert fila == {"cuit": "30111111112", "empresa": "EMPRESA EJEMPLO S.A.", "doc": "100", "fecha": "2026-11-10", "emisor": "EMPRESA EJEMPLO S.A.",
                     "clase": "Clase 12", "ticker": "EJC12", "tipo_pago": "ambos", "fecha_pago": "2026-11-15", "monto_total": 1875000, "moneda": "dolares",
-                    "valor_residual": 75, "tasa": 7.5, "valor_residual_unidad": "porcentaje", "tasa_unidad": "porcentaje", "ambiguo": None}
+                    "valor_residual": 75, "tasa": 7.5, "valor_residual_unidad": "porcentaje", "tasa_unidad": "porcentaje", "ambiguo": None, "fuente": "pdf", "serie_cnv": None}
     assert "cita" not in json.dumps(fila)
     t2 = avp.ejecutar(a, [EMP], c, 10)  # segunda corrida: nada pendiente, ni una llamada mas
     assert t2["procesados"] == 0 and len(c.pedidos) == 1

@@ -18,11 +18,13 @@ import unicodedata
 from . import almacen as alm
 from .financieros import a_numero, candidatos_numero, dividir_paginas, normalizar, periodo_en_texto
 from .modelo import pedir_json
+from .ocr import ILEGIBLE
 
-VERSION_EXTRACTOR = "1"
+VERSION_EXTRACTOR = "2"  # 2: formularios sin valores (OCR); los resultados "ok" de la version 1 se conservan
 MAX_INTENTOS = 3
 MAX_CARACTERES = 20_000  # un aviso de pago son 1-3 paginas; si es mas largo se recorta (lo importante va al principio)
 MIN_CARACTERES_UTILES = 200
+MAX_DIGITOS_FORMULARIO = 20  # un aviso con datos tiene fechas, montos y tasas (decenas de digitos); un formulario vacio solo rotulos
 MIN_PALABRAS_CITA = 2
 MAX_PALABRAS_CITA = 45
 
@@ -75,6 +77,11 @@ cita: entre 2 y 45 palabras COPIADAS LITERALMENTE del documento que contengan es
 Reglas: no calcules, no conviertas, no estimes. Si un dato no figura o no estas seguro, omitelo."""
 
 
+AVISO_OCR = ("NOTA: este texto salio de un OCR de un formulario escaneado/dibujado: los rotulos y sus valores pueden estar en lineas separadas, "
+             f"y {ILEGIBLE} marca un numero que el OCR no pudo leer con confianza. NUNCA completes ni adivines un {ILEGIBLE}: omiti ese dato. "
+             "La cita puede abarcar el rotulo y el valor en lineas seguidas.")
+
+
 # ---------------------------------------------------------------------------
 # Verificacion de lo que devuelve el modelo
 # ---------------------------------------------------------------------------
@@ -101,6 +108,8 @@ def _verificar_item(campo: str, valor: str, cita: str, texto_norm_paginas: list)
     palabras = len(cita.split())
     if palabras < MIN_PALABRAS_CITA or palabras > MAX_PALABRAS_CITA:
         return None, "largo_de_cita"
+    if ILEGIBLE in cita:
+        return None, "cita_con_texto_ilegible"
     buscada = normalizar(cita)
     pagina = next((n for n, t in texto_norm_paginas if buscada in t), None)
     if pagina is None:
@@ -208,22 +217,33 @@ def parece_on(texto: str) -> bool:
     return any(m in n for m in _MARCAS_ON)
 
 
-def procesar_texto(texto: str, cliente) -> dict:
-    """{"estado", ...}. estado: sin_texto | no_es_pago_on | no_es_aviso_pago_on | sin_datos | ok."""
+def es_formulario_sin_valores(texto: str) -> bool:
+    """El PDF del "Aviso de Pago" de la CNV es un formulario cuyo texto extraible son solo los rotulos: los valores (fecha, tasa, montos)
+    estan dibujados como vectores. Se reconoce porque nombra el pago de obligaciones pero casi no tiene digitos."""
+    sin_marcas = re.sub(r"\[pagina \d+\]", "", texto)
+    return parece_on(texto) and sum(c.isdigit() for c in sin_marcas) < MAX_DIGITOS_FORMULARIO
+
+
+def procesar_texto(texto: str, cliente, origen: str = "pdf") -> dict:
+    """{"estado", ...}. estado: sin_texto | no_es_pago_on | formulario_sin_valores | no_es_aviso_pago_on | sin_datos | sin_valores_legibles | ok.
+    `origen` = "ocr" cuando el texto salio del OCR de un formulario (se verifica la cita contra ESE texto)."""
     util = len(re.sub(r"\[pagina \d+\]|\s", "", texto))
-    if util < MIN_CARACTERES_UTILES:
+    if util < MIN_CARACTERES_UTILES and origen == "pdf":
         return {"estado": "sin_texto"}
     if not parece_on(texto):
         return {"estado": "no_es_pago_on"}
+    if origen == "pdf" and es_formulario_sin_valores(texto):
+        return {"estado": "formulario_sin_valores"}  # sin llamar al modelo: no hay valores que extraer
     entrada = texto[:MAX_CARACTERES]
-    r = pedir_json(cliente, INSTRUCCIONES, entrada, ESQUEMA)
+    r = pedir_json(cliente, INSTRUCCIONES, entrada, ESQUEMA, aviso=AVISO_OCR if origen == "ocr" else "")
+    sin_datos = "sin_valores_legibles" if origen == "ocr" else "sin_datos"
     if r.get("es_aviso_pago_on") is not True:
-        return {"estado": "no_es_aviso_pago_on"}
+        return {"estado": sin_datos if origen == "ocr" else "no_es_aviso_pago_on"}
     # se verifica contra el texto COMPLETO (una cita valida puede estar mas alla del recorte que vio el modelo)
     emisor, pagos, descartados = verificar(texto, r.get("datos"))
     if not pagos:
-        return {"estado": "sin_datos", "descartados": descartados}
-    return {"estado": "ok", "emisor": emisor, "pagos": pagos, "descartados": descartados}
+        return {"estado": sin_datos, "descartados": descartados}
+    return {"estado": "ok", "emisor": emisor, "pagos": pagos, "descartados": descartados, "fuente": origen}
 
 
 # ---------------------------------------------------------------------------
@@ -241,12 +261,13 @@ def guardar_avisos(almacen, cuit: str, datos: dict) -> None:
 
 
 def ya_procesado(estado: dict, doc_id: str) -> bool:
+    """Lo "ok" no se vuelve a pagar aunque cambie la version; lo demas se reevalua cuando sube la version del extractor."""
     p = estado["procesados"].get(doc_id)
     if not p:
         return False
     if p.get("estado") == "error":
         return p.get("intentos", 0) >= MAX_INTENTOS
-    return p.get("v") == VERSION_EXTRACTOR
+    return p.get("estado") == "ok" or p.get("v") == VERSION_EXTRACTOR
 
 
 def registrar(estado: dict, empresa: dict, meta: dict, resultado: dict) -> None:
@@ -263,7 +284,8 @@ def registrar(estado: dict, empresa: dict, meta: dict, resultado: dict) -> None:
     if resultado["estado"] == "ok":
         for pago in resultado["pagos"]:
             estado["pagos"].append({"doc": doc_id, "empresa": empresa["empresa"], "fecha_presentacion": meta.get("f"), "url": meta.get("u"),
-                                    "emisor": resultado.get("emisor"), **pago})
+                                    "emisor": resultado.get("emisor"), "fuente": resultado.get("fuente", "pdf"),
+                                    "serie_cnv": (meta.get("serie") or {}).get("d"), **pago})
     estado["procesados"][doc_id] = marca
     estado["pagos"].sort(key=lambda p: (p["fecha_pago"]["valor"], int(p["doc"])), reverse=True)
 
@@ -283,7 +305,9 @@ def construir_indice(almacen, empresas: list) -> int:
                 vistos[clave] = p
         for p in vistos.values():
             fila = {"cuit": e["cuit"], "empresa": e["empresa"], "doc": p["doc"], "fecha": p.get("fecha_presentacion"),
-                    "emisor": p["emisor"]["valor"] if p.get("emisor") else None}
+                    "emisor": p["emisor"]["valor"] if p.get("emisor") else None,
+                    # fuente: "pdf" (texto del PDF) u "ocr" (formulario leido por OCR); serie_cnv: la serie que declara la CNV en la presentacion
+                    "fuente": p.get("fuente", "pdf"), "serie_cnv": p.get("serie_cnv")}
             fila.update({c: _valor(p, c) for c in CAMPOS if c != "emisor"})
             for c in ("valor_residual", "tasa"):
                 fila[c + "_unidad"] = p[c].get("unidad") if c in p else None
@@ -294,22 +318,52 @@ def construir_indice(almacen, empresas: list) -> int:
     return len(filas)
 
 
+def _formulario_con_ocr_nuevo(almacen, cuit: str, doc_id: str, estado: dict) -> bool:
+    """Un documento que quedo en formulario_sin_valores se reevalua cuando aparece su texto de OCR."""
+    p = estado["procesados"].get(doc_id) or {}
+    return p.get("estado") == "formulario_sin_valores" and alm.leer_texto_ocr(almacen, cuit, doc_id) is not None
+
+
 def candidatos(almacen, empresas: list) -> list:
     """[(empresa, meta)] de avisos de pago con texto y sin procesar, los mas recientes primero."""
     salida = []
     for e in empresas:
         estado = leer_avisos(almacen, e["cuit"])
         for m in alm.leer_indice_empresa(almacen, e["cuit"]):
-            # documentos leidos por OCR quedan afuera: un digito mal leido igual "verificaria" contra su propia cita
-            if m.get("t") == "avisos_pago" and m.get("texto_ok") and not m.get("ocr") and not ya_procesado(estado, m["id"]):
+            # documentos leidos por OCR general quedan afuera: un digito mal leido igual "verificaria" contra su propia cita.
+            # (El OCR de formularios es distinto: lo hace ocr_pdf_confiable, que descarta los numeros poco confiables.)
+            if m.get("t") != "avisos_pago" or not m.get("texto_ok") or m.get("ocr"):
+                continue
+            if not ya_procesado(estado, m["id"]) or _formulario_con_ocr_nuevo(almacen, e["cuit"], m["id"], estado):
                 salida.append((e, m))
     salida.sort(key=lambda x: (x[1].get("f") or "", int(x[1]["id"])), reverse=True)
     return salida
 
 
+def contar_formularios(almacen, empresas: list) -> dict:
+    """Cuantos avisos de pago con texto son formularios sin valores, cuantos tienen ya su texto de OCR y como quedaron. Solo lee."""
+    r = {"avisos_con_texto": 0, "formularios_sin_valores": 0, "con_texto_ocr": 0, "ocr_intentado_sin_resultado": 0, "estados": {}, "por_empresa": {}}
+    for e in empresas:
+        estado = leer_avisos(almacen, e["cuit"])["procesados"]
+        for m in alm.leer_indice_empresa(almacen, e["cuit"]):
+            if m.get("t") != "avisos_pago" or not m.get("texto_ok"):
+                continue
+            r["avisos_con_texto"] += 1
+            texto = alm.leer_texto(almacen, e["cuit"], m["id"]) or ""
+            if not es_formulario_sin_valores(texto):
+                continue
+            r["formularios_sin_valores"] += 1
+            r["por_empresa"][e["empresa"]] = r["por_empresa"].get(e["empresa"], 0) + 1
+            r["con_texto_ocr"] += alm.leer_texto_ocr(almacen, e["cuit"], m["id"]) is not None
+            r["ocr_intentado_sin_resultado"] += bool(m.get("ocr_form_intentado")) and alm.leer_texto_ocr(almacen, e["cuit"], m["id"]) is None
+            est = (estado.get(m["id"]) or {}).get("estado", "pendiente")
+            r["estados"][est] = r["estados"].get(est, 0) + 1
+    return r
+
+
 def ejecutar(almacen, empresas: list, cliente, max_docs: int = 200, hasta_t: float | None = None) -> dict:
     """Procesa hasta `max_docs` avisos pendientes (el tope cuenta documentos enviados al modelo)."""
-    total = {"procesados": 0, "ok": 0, "saltados": 0, "errores": 0, "pendientes": 0}
+    total = {"procesados": 0, "ok": 0, "saltados": 0, "errores": 0, "pendientes": 0, "formularios_sin_valores": 0, "sin_valores_legibles": 0}
     pend = candidatos(almacen, empresas)
     estados, llamadas = {}, 0
     for i, (e, m) in enumerate(pend):
@@ -326,7 +380,11 @@ def ejecutar(almacen, empresas: list, cliente, max_docs: int = 200, hasta_t: flo
             continue
         try:
             resultado = procesar_texto(texto, cliente)
-            if resultado["estado"] not in ("sin_texto", "no_es_pago_on"):
+            if resultado["estado"] == "formulario_sin_valores":
+                texto_ocr = alm.leer_texto_ocr(almacen, e["cuit"], m["id"])
+                if texto_ocr:  # los valores salieron del OCR: se verifica contra ese texto
+                    resultado = procesar_texto(texto_ocr, cliente, origen="ocr")
+            if resultado["estado"] not in ("sin_texto", "no_es_pago_on", "formulario_sin_valores"):
                 llamadas += 1
         except Exception as error:  # red, API o JSON invalido: se reintenta (hasta MAX_INTENTOS)
             llamadas += 1
@@ -336,6 +394,8 @@ def ejecutar(almacen, empresas: list, cliente, max_docs: int = 200, hasta_t: flo
         guardar_avisos(almacen, e["cuit"], estado)  # tras cada documento: un corte no pierde lo ya pagado
         total["procesados"] += 1
         total["ok"] += resultado["estado"] == "ok"
-        total["saltados"] += resultado["estado"] in ("sin_texto", "no_es_pago_on")
+        total["saltados"] += resultado["estado"] in ("sin_texto", "no_es_pago_on", "formulario_sin_valores")
+        total["formularios_sin_valores"] += resultado["estado"] == "formulario_sin_valores"
+        total["sin_valores_legibles"] += resultado["estado"] == "sin_valores_legibles"
         print(f"  {e['empresa']} #{m['id']}: {resultado['estado']}", flush=True)
     return total
