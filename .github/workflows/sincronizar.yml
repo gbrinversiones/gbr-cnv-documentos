@@ -118,6 +118,9 @@ jobs:
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: python -m cnv clasificar --max 500 --tiempo-max 900
+      - name: Indice de busqueda de texto completo (BM25)
+        continue-on-error: true
+        run: python -m cnv busqueda --tiempo-max 1500
       - name: Estructurar avisos de pago de ONs (Claude Haiku, max 200 por corrida)
         continue-on-error: true
         env:

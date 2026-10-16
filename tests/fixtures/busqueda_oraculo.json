@@ -1,0 +1,659 @@
+{
+ "descripcion": "Corpus sintetico + indice generado por cnv/busqueda.py + ranking BM25 esperado (k1=1.2, b=0.75). Contrato con el lector en JS.",
+ "parametros": {
+  "k1": 1.2,
+  "b": 0.75,
+  "shards": 64,
+  "df_min": 2,
+  "df_max_porcentaje": 40,
+  "tf_max": 255,
+  "max_caracteres": 20000,
+  "largo_token": [
+   3,
+   30
+  ]
+ },
+ "idf": "ln(1 + (N - df + 0.5) / (df + 0.5)); score = sum idf * tf*(k1+1) / (tf + k1*(1 - b + b*len/avgdl)); desempate: menor doc_idx",
+ "stopwords": [
+  "al",
+  "algun",
+  "alguna",
+  "algunas",
+  "algunos",
+  "anonima",
+  "anonimas",
+  "ante",
+  "aquel",
+  "aquella",
+  "aquellas",
+  "aquellos",
+  "asi",
+  "atentamente",
+  "aun",
+  "aunque",
+  "bajo",
+  "cada",
+  "cnv",
+  "comision",
+  "como",
+  "compania",
+  "companias",
+  "comunica",
+  "comunicamos",
+  "con",
+  "contra",
+  "cual",
+  "cuales",
+  "cualquier",
+  "cualquiera",
+  "cuando",
+  "cuya",
+  "cuyas",
+  "cuyo",
+  "cuyos",
+  "de",
+  "debe",
+  "deben",
+  "debera",
+  "deberan",
+  "debido",
+  "del",
+  "demas",
+  "desde",
+  "documento",
+  "documentos",
+  "donde",
+  "durante",
+  "e",
+  "el",
+  "ellas",
+  "ello",
+  "ellos",
+  "empresa",
+  "empresas",
+  "en",
+  "entre",
+  "era",
+  "eran",
+  "es",
+  "esa",
+  "esas",
+  "ese",
+  "eso",
+  "esos",
+  "esta",
+  "estaba",
+  "estaban",
+  "estado",
+  "estan",
+  "estar",
+  "estas",
+  "este",
+  "esto",
+  "estos",
+  "estuvo",
+  "fue",
+  "fueron",
+  "ha",
+  "haber",
+  "habia",
+  "habian",
+  "habido",
+  "habra",
+  "hace",
+  "hacen",
+  "hacer",
+  "hacia",
+  "han",
+  "hasta",
+  "he",
+  "hecho",
+  "hemos",
+  "hizo",
+  "hubo",
+  "informa",
+  "informamos",
+  "informan",
+  "informar",
+  "la",
+  "las",
+  "les",
+  "lo",
+  "los",
+  "mas",
+  "mediante",
+  "menos",
+  "mi",
+  "mis",
+  "misma",
+  "mismas",
+  "mismo",
+  "mismos",
+  "muchas",
+  "muchos",
+  "muy",
+  "nacional",
+  "ni",
+  "ningun",
+  "ninguna",
+  "no",
+  "nos",
+  "nota",
+  "notas",
+  "nuestra",
+  "nuestras",
+  "nuestro",
+  "nuestros",
+  "o",
+  "otra",
+  "otras",
+  "otro",
+  "otros",
+  "pagina",
+  "paginas",
+  "para",
+  "pero",
+  "pocas",
+  "pocos",
+  "poder",
+  "podra",
+  "podran",
+  "podria",
+  "por",
+  "porque",
+  "presente",
+  "presentes",
+  "puede",
+  "pueden",
+  "pues",
+  "que",
+  "quien",
+  "quienes",
+  "saludamos",
+  "saludo",
+  "se",
+  "segun",
+  "senor",
+  "senores",
+  "ser",
+  "sera",
+  "seran",
+  "seria",
+  "serian",
+  "si",
+  "sido",
+  "siendo",
+  "sin",
+  "sino",
+  "sobre",
+  "sociedad",
+  "sociedades",
+  "solamente",
+  "solo",
+  "son",
+  "sr",
+  "sra",
+  "sres",
+  "su",
+  "sus",
+  "tambien",
+  "tan",
+  "tanta",
+  "tantas",
+  "tanto",
+  "tantos",
+  "tener",
+  "tenia",
+  "tenian",
+  "tenido",
+  "tiene",
+  "tienen",
+  "toda",
+  "todas",
+  "todo",
+  "todos",
+  "tras",
+  "tu",
+  "tus",
+  "tuvo",
+  "u",
+  "un",
+  "una",
+  "unas",
+  "uno",
+  "unos",
+  "ustedes",
+  "valores",
+  "varias",
+  "varios",
+  "vos",
+  "y",
+  "ya",
+  "yo"
+ ],
+ "tokenizacion": [
+  [
+   "Obligaciones NEGOCIABLES Clase 5",
+   [
+    "obligaciones",
+    "negociables",
+    "clase"
+   ]
+  ],
+  [
+   "Calificación de riesgo AA+ — energía",
+   [
+    "calificacion",
+    "riesgo",
+    "energia"
+   ]
+  ],
+  [
+   "ÁÉÍÓÚ ñandú 2026-10-15",
+   [
+    "aeiou",
+    "nandu",
+    "2026"
+   ]
+  ],
+  [
+   "de la el por S.A. CNV",
+   []
+  ],
+  [
+   "a1 b22 ccc xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx yyyyyyyyyyyyyyyyyyyyyyyyyyyyyy",
+   [
+    "b22",
+    "ccc",
+    "yyyyyyyyyyyyyyyyyyyyyyyyyyyyyy"
+   ]
+  ]
+ ],
+ "shards_literales": {
+  "hello": 6,
+  "hello world": 5,
+  "bonos": 33,
+  "dividendos": 49,
+  "obligaciones": 14,
+  "recompra": 26,
+  "energía": 1
+ },
+ "corpus": [
+  {
+   "cuit": "30111111112",
+   "doc_id": "101",
+   "tipo": "hechos",
+   "texto": "[pagina 1]\nLa Sociedad informa la recompra de obligaciones negociables Clase 5 por hasta US$ 5.000.000. El Directorio aprobo la recompra en el mercado."
+  },
+  {
+   "cuit": "30111111112",
+   "doc_id": "102",
+   "tipo": "hechos",
+   "texto": "[pagina 1]\nResultados del tercer trimestre: ganancia neta de $ 1.250 millones. La ganancia operativa crecio por mayores ventas de energia."
+  },
+  {
+   "cuit": "30111111112",
+   "doc_id": "103",
+   "tipo": "hechos",
+   "texto": "[pagina 1]\nConvocatoria a Asamblea General Ordinaria de accionistas para considerar la distribucion de dividendos en efectivo."
+  },
+  {
+   "cuit": "30111111112",
+   "doc_id": "104",
+   "tipo": "avisos_pago",
+   "texto": "[pagina 1]\nAviso de pago de servicios de las Obligaciones Negociables Clase 5: pago de intereses el 15 de noviembre de 2026."
+  },
+  {
+   "cuit": "30222222223",
+   "doc_id": "201",
+   "tipo": "hechos",
+   "texto": "[pagina 1]\nCalificacion de riesgo: la calificadora confirmo la calificacion AA+ de las obligaciones negociables de la compania."
+  },
+  {
+   "cuit": "30222222223",
+   "doc_id": "202",
+   "tipo": "prospectos",
+   "texto": "[pagina 1]\nPrograma global de emision de obligaciones negociables por hasta US$ 500.000.000. Factores de riesgo y condiciones de emision.\n\n[pagina 2]\nLa emision de obligaciones negociables Clase 7 devengara intereses a tasa fija."
+  },
+  {
+   "cuit": "30222222223",
+   "doc_id": "203",
+   "tipo": "actas",
+   "texto": "[pagina 1]\nActa de directorio: se designa nuevo director titular y se aprueba la recompra de acciones propias por hasta 2.000.000 de acciones."
+  },
+  {
+   "cuit": "30222222223",
+   "doc_id": "204",
+   "tipo": "hechos",
+   "texto": "[pagina 1]\nDemanda judicial: la sociedad fue notificada de una demanda por incumplimiento contractual. La sociedad considera que la demanda carece de fundamento."
+  },
+  {
+   "cuit": "30333333334",
+   "doc_id": "301",
+   "tipo": "hechos",
+   "texto": "[pagina 1]\nEl Directorio resolvio distribuir dividendos en efectivo por $ 25.000.000 a los accionistas. Pago de dividendos a partir del 20 de octubre."
+  },
+  {
+   "cuit": "30333333334",
+   "doc_id": "302",
+   "tipo": "hechos",
+   "texto": "[pagina 1]\nColocacion de obligaciones negociables Clase 3: se recibieron ofertas por US$ 30.000.000. Tasa de corte 8,5% nominal anual."
+  },
+  {
+   "cuit": "30333333334",
+   "doc_id": "303",
+   "tipo": "avisos_pago",
+   "texto": "[pagina 1]\nAviso de pago de intereses de las obligaciones negociables Clase 3. Fecha de pago: 3 de diciembre de 2026."
+  },
+  {
+   "cuit": "30333333334",
+   "doc_id": "304",
+   "tipo": "hechos",
+   "texto": "[pagina 1]\nCompra de la planta industrial: la empresa adquirio activos de energia renovable por US$ 12.000.000."
+  }
+ ],
+ "indice": {
+  "meta": {
+   "version": 1,
+   "n_docs": 12,
+   "avgdl": 11.25,
+   "shards": 64,
+   "generado": "2026-10-16T12:00:00Z"
+  },
+  "docs": [
+   [
+    "30111111112",
+    "101",
+    10
+   ],
+   [
+    "30111111112",
+    "102",
+    13
+   ],
+   [
+    "30111111112",
+    "103",
+    9
+   ],
+   [
+    "30111111112",
+    "104",
+    10
+   ],
+   [
+    "30222222223",
+    "201",
+    7
+   ],
+   [
+    "30222222223",
+    "202",
+    20
+   ],
+   [
+    "30222222223",
+    "203",
+    13
+   ],
+   [
+    "30222222223",
+    "204",
+    10
+   ],
+   [
+    "30333333334",
+    "301",
+    12
+   ],
+   [
+    "30333333334",
+    "302",
+    12
+   ],
+   [
+    "30333333334",
+    "303",
+    10
+   ],
+   [
+    "30333333334",
+    "304",
+    9
+   ]
+  ],
+  "shards": {
+   "s00": {
+    "efectivo": [
+     [
+      2,
+      1
+     ],
+     [
+      8,
+      1
+     ]
+    ]
+   },
+   "s04": {
+    "riesgo": [
+     [
+      4,
+      1
+     ],
+     [
+      5,
+      1
+     ]
+    ]
+   },
+   "s14": {
+    "2026": [
+     [
+      3,
+      1
+     ],
+     [
+      10,
+      1
+     ]
+    ]
+   },
+   "s18": {
+    "accionistas": [
+     [
+      2,
+      1
+     ],
+     [
+      8,
+      1
+     ]
+    ]
+   },
+   "s26": {
+    "recompra": [
+     [
+      0,
+      2
+     ],
+     [
+      6,
+      1
+     ]
+    ]
+   },
+   "s27": {
+    "directorio": [
+     [
+      0,
+      1
+     ],
+     [
+      6,
+      1
+     ],
+     [
+      8,
+      1
+     ]
+    ]
+   },
+   "s49": {
+    "dividendos": [
+     [
+      2,
+      1
+     ],
+     [
+      8,
+      2
+     ]
+    ]
+   },
+   "s51": {
+    "aviso": [
+     [
+      3,
+      1
+     ],
+     [
+      10,
+      1
+     ]
+    ]
+   },
+   "s57": {
+    "energia": [
+     [
+      1,
+      1
+     ],
+     [
+      11,
+      1
+     ]
+    ]
+   },
+   "s58": {
+    "intereses": [
+     [
+      3,
+      1
+     ],
+     [
+      5,
+      1
+     ],
+     [
+      10,
+      1
+     ]
+    ]
+   },
+   "s59": {
+    "tasa": [
+     [
+      5,
+      1
+     ],
+     [
+      9,
+      1
+     ]
+    ]
+   },
+   "s62": {
+    "pago": [
+     [
+      3,
+      2
+     ],
+     [
+      8,
+      1
+     ],
+     [
+      10,
+      2
+     ]
+    ]
+   }
+  }
+ },
+ "consultas": [
+  {
+   "consulta": "recompra directorio aprobo acciones",
+   "k": 5,
+   "esperado": [
+    [
+     "30111111112",
+     "101",
+     3.714703
+    ],
+    [
+     "30222222223",
+     "203",
+     2.7837
+    ],
+    [
+     "30333333334",
+     "301",
+     1.27735
+    ]
+   ]
+  },
+  {
+   "consulta": "dividendos efectivo accionistas pago",
+   "k": 5,
+   "esperado": [
+    [
+     "30333333334",
+     "301",
+     6.712311
+    ],
+    [
+     "30111111112",
+     "103",
+     5.386706
+    ],
+    [
+     "30111111112",
+     "104",
+     1.862458
+    ],
+    [
+     "30333333334",
+     "303",
+     1.862458
+    ]
+   ]
+  },
+  {
+   "consulta": "intereses pago clase fecha",
+   "k": 5,
+   "esperado": [
+    [
+     "30111111112",
+     "104",
+     3.23713
+    ],
+    [
+     "30333333334",
+     "303",
+     3.23713
+    ],
+    [
+     "30333333334",
+     "301",
+     1.27735
+    ],
+    [
+     "30222222223",
+     "202",
+     0.995452
+    ]
+   ]
+  }
+ ]
+}
