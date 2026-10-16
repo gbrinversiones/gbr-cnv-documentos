@@ -8,6 +8,7 @@
   python -m cnv salud [--formato md|json] [--dias-silencio 60] [--hoy AAAA-MM-DD]   # informe de salud (solo lee)
   python -m cnv escaneados                       # cuenta los PDF escaneados segun los marcadores (solo lee)
   python -m cnv ocr [--max-docs N] [--tiempo-max 7200]   # OCR de los escaneados; requiere tesseract (ver cnv/ocr.py)
+  python -m cnv busqueda [--tiempo-max 1500]      # indice de texto completo (BM25) para el buscador; reconstruye todo
   python -m cnv clasificar [--max 500] [--tiempo-max 900]
   python -m cnv avisos-pago [--max 200] [--solo CUIT] [--tiempo-max 900]
 """
@@ -21,6 +22,7 @@ import time
 
 from . import almacen as alm
 from . import avisos_pago as avp
+from . import busqueda as bus
 from . import clasificacion as cla
 from . import escaneados as esc
 from . import ocr
@@ -72,6 +74,8 @@ def main(argv=None) -> int:
     oc.add_argument("--max-docs", type=int, default=None, help="tope de documentos por empresa y por corrida")
     oc.add_argument("--tiempo-max", type=int, default=7200)
     oc.add_argument("--solo", default=None, help="CUIT: procesa solo esa empresa")
+    bq = sub.add_parser("busqueda")
+    bq.add_argument("--tiempo-max", type=int, default=1500, help="segundos; si no alcanza NO se publica nada (el indice anterior sigue valiendo)")
     cl = sub.add_parser("clasificar")
     cl.add_argument("--max", type=int, default=500, help="maximo de hechos clasificados por corrida (controla el costo)")
     cl.add_argument("--tiempo-max", type=int, default=900)
@@ -142,6 +146,14 @@ def main(argv=None) -> int:
         total = res.ejecutar(almacen, universo, anthropic.Anthropic(timeout=60.0), a.max, time.monotonic() + a.tiempo_max)
         print("TOTAL", total)
         print(f"indice global: {construir_indice_global(almacen, universo)} documentos")
+        return 0
+
+    if a.cmd == "busqueda":
+        r = bus.construir(almacen, universo, time.monotonic() + a.tiempo_max)
+        print("TOTAL", r)
+        if r["estado"] != "ok":
+            print("sin tiempo: no se publico el indice nuevo; el anterior sigue vigente. Subir --tiempo-max.")
+            return 3
         return 0
 
     if a.cmd == "clasificar":

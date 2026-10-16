@@ -8,6 +8,7 @@ Descarga los documentos **públicos** que las empresas argentinas presentan en l
 - `python -m cnv indice`: arma el índice global que usa el buscador.
 - `python -m cnv financieros`: extrae cifras clave de los estados contables ya descargados (ver abajo).
 - `python -m cnv universo`: verifica los CUIT del CSV contra la CNV y sugiere candidatos para empresas que faltan (ver abajo; no modifica el CSV).
+- `python -m cnv busqueda`: reconstruye el índice de búsqueda de texto completo (BM25) que lee el buscador de la landing (ver abajo).
 - `python -m cnv salud`: informe de salud de la base (solo lee; ver abajo).
 - `python -m cnv escaneados`: cuenta los PDF escaneados del universo según los marcadores (solo lee).
 - `python -m cnv ocr`: OCR opcional de los PDF escaneados (ver abajo).
@@ -102,6 +103,14 @@ python -m cnv universo --sugerir "Edesa" --confirmar                   # abre la
 - **`--verificar`:** abre la página pública de cada empresa (`Empresas/Empresa/{cuit}?fdesde=01/01/2016`; con una ventana reciente y sin presentaciones la CNV muestra «No se encontrarón resultados» en vez de la razón social) y compara la razón social del marcador «Resultados de búsqueda:» con la del CSV (sin acentos, mayúsculas, sufijos societarios ni alias entre paréntesis; `Cia.`=Compañía, `Hnos.`=Hermanos, `Imp.`/`Exp.`=Importadora/Exportadora). Veredictos: `coincide`, `revisar_nombre_parcial`, `razon_social_distinta`, `cuit_no_existe_en_cnv` (la CNV muestra la portada genérica), `sin_razon_social_legible`, `cuit_invalido` (dígito verificador; no gasta consulta), `sin_cuit`, `error_de_red`; más CUIT y nombres duplicados. Reintentos con espera creciente, tope de tiempo y avance en `--salida` (reanudable; los `error_de_red` se reintentan).
 - **`--sugerir NOMBRE`:** consulta el autocompletado público (`Empresas/Autocomplete?term=`) con el nombre completo y versiones más cortas, lista los candidatos con CUIT, parecido, validez del CUIT y si ya están en el CSV.
 - Se puede correr desde GitHub (*Actions → Verificar universo CNV*): el informe queda en el resumen del job y como artefacto.
+
+## Índice de búsqueda de texto completo (`cnv/busqueda.py`)
+Para encontrar documentos por lo que dicen y no solo por el título. `python -m cnv busqueda [--tiempo-max 1500]` reconstruye **todo** (idempotente: mismos bytes si el corpus no cambió, y no vuelve a subir lo que no cambió). Lee el texto de los documentos con `texto_ok` de tipo `hechos`, `prospectos`, `avisos_pago` y `actas` (no estados contables), solo los primeros 20.000 caracteres (sin las marcas `[pagina N]`).
+- **Tokenización** (idéntica en el lector JS): NFD y sacar marcas combinantes → minúsculas → `/[a-z0-9]+/` → descartar largo < 3 o > 30 → descartar stopwords (`STOPWORDS`, lista fija) → sin stemming. La consulta se tokeniza igual.
+- **Archivos:** `cnv/busqueda/docs.json.gz` = `[[cuit, doc_id, longitud_en_tokens], ...]` (el orden es el `doc_idx`: por cuit y por id numérico); `cnv/busqueda/meta.json` = `{"version":1,"n_docs","avgdl","shards":64,"generado"}`; `cnv/busqueda/s00.json.gz … s63.json.gz` = `{"termino": [[doc_idx, tf], ...]}` con el shard de un término = `zlib.crc32(termino.encode("utf-8")) % 64`. Solo entran términos con `df >= 2` y `df <= 40%` de los documentos; `tf` acotado a 255; postings ordenados por `doc_idx`. Los 64 shards existen siempre (vacíos si hace falta).
+- **Publicación:** primero los shards, luego `docs.json.gz`, al final `meta.json` (el lector arranca por `meta.json`). Si se acaba el tiempo antes de publicar, **no se escribe nada** y el índice anterior sigue vigente (exit code 3).
+- **Oráculo:** `buscar_bm25(almacen, consulta, k)` (BM25, `k1=1.2`, `b=0.75`, `idf = ln(1 + (N-df+0.5)/(df+0.5))`, desempate por menor `doc_idx`) y `tests/fixtures/busqueda_oraculo.json` (corpus sintético, índice resultante, stopwords, casos de tokenización, shards literales y 3 consultas con su ranking) para el test cruzado con el lector. Regenerar con `python -m tests.generar_oraculo` solo si cambia el contrato (y subir `VERSION`).
+- **Tamaño estimado para 20.000 documentos:** ~11 MB en total (64 shards de ~150–190 KB gz + `docs.json.gz` de ~90 KB); una consulta baja un shard por término. Es una simulación con un corpus sintético tipo Zipf (6,6 M de tokens, 145 mil términos), no una medición con documentos reales.
 
 ## Configuración (repo)
 - Secret `GCP_SA_KEY`: JSON de la cuenta de servicio con rol *Storage Object Admin* sobre el bucket.
