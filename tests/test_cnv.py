@@ -21,7 +21,7 @@ HTML = (
 def test_parsear_listado_tipos_y_fechas():
     docs = listado.parsear_listado(HTML)
     assert [d["doc_id"] for d in docs] == ["3580501", "3570000", "3500000", "3490000"]
-    assert [d["tipo"] for d in docs] == ["hechos", "hechos", "estados_contables", "otros"]
+    assert [d["tipo"] for d in docs] == ["hechos", "hechos", "estados_contables", "avisos_pago"]
     assert docs[0]["fecha"] == "2026-10-14" and docs[2]["fecha"] == "2026-08-10"
 
 
@@ -72,7 +72,7 @@ def test_sincronizar_empresa_baja_nuevos_y_marca_fallidos(tmp_path, monkeypatch)
     monkeypatch.setattr(sincronizar, "sesion", lambda: None)
     monkeypatch.setattr(sincronizar.time, "sleep", lambda s: None)
 
-    def falso(url, s=None):
+    def falso(url, s=None, **kw):
         if url.endswith("/a"):
             return {"texto": "[pagina 1]\nResultados del trimestre", "paginas": 1, "archivos": ["a.pdf"], "escaneado": False}
         return {}  # sin adjunto

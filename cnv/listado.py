@@ -18,6 +18,7 @@ TIPOS = (
     ("hechos", ("hechos relevantes",)),
     ("estados_contables", ("estados contables", "informacion financiera", "información financiera")),
     ("prospectos", ("prospectos", "suplementos", "avisos de resultado", "aviso de resultado", "aviso de suscrip")),
+    ("avisos_pago", ("aviso de pago", "avisos de pago")),
     ("actas", ("acta",)),
 )
 

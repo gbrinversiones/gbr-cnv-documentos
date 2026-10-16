@@ -16,8 +16,14 @@ on:
         description: "Fecha desde (AAAA-MM-DD). Diario: 30 dias atras."
         default: ""
       tipos:
-        description: "Tipos de documento, separados por coma (hechos, estados_contables, prospectos, actas)"
-        default: "hechos,estados_contables"
+        description: "Tipos de documento, separados por coma (hechos, estados_contables, prospectos, avisos_pago, actas)"
+        default: "hechos,estados_contables,prospectos,avisos_pago,actas"
+      max_paginas:
+        description: "Tope de paginas de texto por documento (un prospecto puede tener cientos)"
+        default: "400"
+      max_caracteres:
+        description: "Tope de caracteres de texto por documento"
+        default: "1500000"
       tiempo_max:
         description: "Segundos maximos por fragmento"
         default: "18000"
@@ -37,6 +43,8 @@ jobs:
     env:
       GCS_BUCKET: ${{ vars.GCS_BUCKET }}
       GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
+      CNV_MAX_PAGINAS: ${{ github.event.inputs.max_paginas || '400' }}
+      CNV_MAX_CARACTERES: ${{ github.event.inputs.max_caracteres || '1500000' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -48,7 +56,7 @@ jobs:
         run: |
           DESDE="${{ github.event.inputs.desde }}"
           if [ -z "$DESDE" ]; then DESDE=$(date -u -d "30 days ago" +%F); fi
-          python -m cnv sync --desde "$DESDE" --tipos "${{ github.event.inputs.tipos || 'hechos,estados_contables' }}" \
+          python -m cnv sync --desde "$DESDE" --tipos "${{ github.event.inputs.tipos || 'hechos,estados_contables,prospectos,avisos_pago,actas' }}" \
             --fragmento "${{ matrix.fragmento }}/4" --tiempo-max "${{ github.event.inputs.tiempo_max || '18000' }}"
 
   indice:
