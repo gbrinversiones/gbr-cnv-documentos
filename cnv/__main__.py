@@ -8,6 +8,7 @@
   python -m cnv salud [--formato md|json] [--dias-silencio 60] [--hoy AAAA-MM-DD]   # informe de salud (solo lee)
   python -m cnv escaneados                       # cuenta los PDF escaneados segun los marcadores (solo lee)
   python -m cnv ocr [--max-docs N] [--tiempo-max 7200]   # OCR de los escaneados; requiere tesseract (ver cnv/ocr.py)
+  python -m cnv novedades [--dias 7] [--hoy AAAA-MM-DD]   # documentos nuevos y lo presentado en los ultimos dias (sin modelo)
   python -m cnv ratios                            # ratios por emisor y periodo desde las cifras verificadas (sin modelo)
   python -m cnv busqueda [--tiempo-max 1500]      # indice de texto completo (BM25) para el buscador; reconstruye todo
   python -m cnv clasificar [--max 500] [--tiempo-max 900]
@@ -26,6 +27,7 @@ from . import avisos_pago as avp
 from . import busqueda as bus
 from . import clasificacion as cla
 from . import escaneados as esc
+from . import novedades as nov
 from . import ocr
 from . import ratios as rat
 from . import salud
@@ -78,6 +80,9 @@ def main(argv=None) -> int:
     oc.add_argument("--tiempo-max", type=int, default=7200)
     oc.add_argument("--solo", default=None, help="CUIT: procesa solo esa empresa")
     sub.add_parser("ratios")
+    nv = sub.add_parser("novedades")
+    nv.add_argument("--dias", type=int, default=nov.DIAS, help="ventana en dias segun la fecha de presentacion")
+    nv.add_argument("--hoy", default=None, help="AAAA-MM-DD (para reproducir un informe)")
     bq = sub.add_parser("busqueda")
     bq.add_argument("--tiempo-max", type=int, default=1500, help="segundos; si no alcanza NO se publica nada (el indice anterior sigue valiendo)")
     cl = sub.add_parser("clasificar")
@@ -150,6 +155,11 @@ def main(argv=None) -> int:
         total = res.ejecutar(almacen, universo, anthropic.Anthropic(timeout=60.0), a.max, time.monotonic() + a.tiempo_max)
         print("TOTAL", total)
         print(f"indice global: {construir_indice_global(almacen, universo)} documentos")
+        return 0
+
+    if a.cmd == "novedades":
+        r = nov.construir(almacen, universo, dt.date.fromisoformat(a.hoy) if a.hoy else None, a.dias)
+        print("TOTAL", json.dumps(r, ensure_ascii=False))
         return 0
 
     if a.cmd == "ratios":

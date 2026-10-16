@@ -133,3 +133,7 @@ jobs:
         if: always()
         continue-on-error: true
         run: python -m cnv salud >> "$GITHUB_STEP_SUMMARY"
+      - name: Novedades de los ultimos 7 dias (sin modelo)
+        if: always()
+        continue-on-error: true
+        run: python -m cnv novedades

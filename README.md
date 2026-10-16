@@ -13,6 +13,7 @@ Descarga los documentos **públicos** que las empresas argentinas presentan en l
 - `python -m cnv escaneados`: cuenta los PDF escaneados del universo según los marcadores (solo lee).
 - `python -m cnv ocr`: OCR opcional de los PDF escaneados (ver abajo).
 - `python -m cnv clasificar`: asigna una categoría cerrada (`k`) a cada hecho relevante (ver abajo).
+- `python -m cnv novedades`: documentos nuevos entre corridas y lo presentado en los últimos 7 días, para la landing (sin modelo; ver abajo).
 - `python -m cnv ratios`: ratios por emisor y periodo desde las cifras verificadas (sin modelo; ver abajo).
 - `python -m cnv avisos-pago`: estructura los avisos de pago de ONs ya descargados (ver abajo).
 - El workflow `Sincronizar documentos CNV` corre todos los días (y se puede disparar a mano para cargas grandes).
@@ -53,6 +54,13 @@ export ANTHROPIC_API_KEY=...   # no se guarda en ningún archivo
 python -m cnv financieros --max 20 --solo 30546689979 --tiempo-max 600
 ```
 `--max` es el tope de documentos enviados al modelo por corrida (costo acotado); el workflow lo corre al final del job `indice` con `--max 150` y `continue-on-error`. Solo procesa documentos ya descargados: hay que haber corrido `python -m cnv sync --tipos estados_contables`.
+
+## Novedades (`cnv/novedades.py`)
+`python -m cnv novedades [--dias 7] [--hoy AAAA-MM-DD]` escribe `cnv/indice/novedades.json` (JSON plano, sin modelo, US$ 0) con lo **presentado** en los últimos 7 días (fecha de presentación ≥ hoy − 7, inclusive): hechos relevantes agrupados por categoría y avisos de pago. Es el último paso del job `indice`.
+- **Estado entre corridas:** `cnv/indice/vistos.json` (`{"version":1,"cuits":{cuit:{doc_id: fecha en que se vio por primera vez}}}`) para hechos y avisos de pago. En la primera corrida se siembra con la fecha de presentación de cada documento, así que lo que ya estaba **no** cuenta como nuevo; después, todo documento que aparece en el índice y no estaba queda detectado ese día. Una carga histórica no llena la lista: se detecta hoy pero se presentó hace años, y la ventana mira la fecha de presentación.
+- **Formato de `novedades.json`:** `{"version":1,"al","desde","dias","resumen":{hechos, hechos_por_categoria, avisos_pago, pagos_estructurados, nuevos_en_esta_corrida},"hechos_por_categoria":{categoria:[{cuit, empresa, doc, fecha, titulo, resumen, url, categoria, detectado, texto_ok}]},"avisos_pago":[{cuit, empresa, doc, fecha_presentacion, estructurado, fecha_pago, tipo_pago, clase, ticker, monto_total, moneda, url, detectado}]}`. Categorías: las de la lista cerrada de la clasificación más `sin_clasificar` (sin `k` todavía o categoría fuera de la lista). Orden: más nuevo primero. Un hecho cuyo texto no se pudo bajar igual aparece (con el título de la CNV; `texto_ok: false`).
+- **Avisos de pago:** una fila por pago estructurado (con los datos verificados de `cnv/avisos_pago`); si el aviso todavía no se estructuró, una fila con `estructurado: false`. `detectado` permite a la landing resaltar lo de hoy (presentado hace 3 días y detectado hoy es una novedad de hoy). `nuevos_en_esta_corrida` cuenta lo detectado en esa ejecución.
+- No se vuelve a escribir ningún archivo si el contenido es igual (`al` cambia cada día, así que `novedades.json` sí se actualiza diariamente).
 
 ## Ratios por emisor (`cnv/ratios.py`)
 `python -m cnv ratios` calcula, por emisor y periodo, a partir de las cifras **ya verificadas** de `cnv/financieros/{cuit}.json` (no usa el modelo, cuesta US$ 0) y escribe `cnv/indice/ratios.json.gz`.
@@ -171,6 +179,9 @@ Una fila por documento **con texto**: `id, c, e, f, t, s, d, u, p, n, r, k` (los
 
 ### `cnv/indice/financieros.json.gz`
 Una fila por empresa/periodo/tipo/acumulado/balance: `cuit, empresa, periodo, tipo, acumulado, balance, moneda, unidad, escala, doc, fecha, periodo_verificado, balance_coherente` + los 12 campos de cifras (valor tal cual figura o `null`).
+
+### `cnv/indice/novedades.json` y `cnv/indice/vistos.json`
+Ver «Novedades». `vistos.json` es estado interno entre corridas (no lo lee la landing).
 
 ### `cnv/indice/ratios.json.gz`
 Ver «Ratios por emisor». Un objeto por cuit con la lista de periodos; cada ratio es un número o `null` con su motivo.
