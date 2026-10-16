@@ -7,6 +7,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 
 from . import almacen as alm
+from . import ocr
 from .descarga import Limites, texto_de_presentacion
 from .listado import listar, sesion
 
@@ -34,7 +35,8 @@ def _con_reintentos(fn, intentos: int = 3, espera: float = 4.0):
 
 
 def pendientes(docs: list, indice: list, tipos: tuple) -> list:
-    """Documentos del listado de los tipos pedidos que todavia no tienen texto guardado ni intento terminado."""
+    """Documentos del listado de los tipos pedidos que todavia no tienen texto guardado ni intento terminado.
+    Los escaneados que fallaron NO se reintentan aca: con OCR se reprocesan aparte (`reprocesar_escaneados`)."""
     hechos = {d["id"]: d for d in indice}
     salida = []
     for d in docs:
@@ -63,6 +65,8 @@ def _procesar(almacen, empresa: dict, d: dict, previo: dict | None, limites: Lim
     if not r or not r.get("texto", "").strip():
         motivo = "; ".join(f"{f['archivo']}: {f['motivo']}" for f in fallos)[:120] or ("sin texto" if r else "sin adjunto")
         meta.update({"texto_ok": False, "intentos": meta["intentos"] + 1, "error": motivo, "escaneado": bool(r and r.get("escaneado"))})
+        if r and r.get("ocr_intentado"):
+            meta["ocr_intentado"] = True  # el OCR corrio y no saco texto: no se vuelve a gastar tiempo en este documento
         return meta
     meta["intentos"] += 1 if fallos else 0
     if fallos and previo and previo.get("texto_ok") and (previo.get("n") or 0) >= len(r["texto"]):
@@ -73,13 +77,19 @@ def _procesar(almacen, empresa: dict, d: dict, previo: dict | None, limites: Lim
     # campos opcionales: solo existen cuando hay algo que contar, asi los indices viejos no cambian de forma
     if r.get("truncado"):
         meta["trunc"] = r["truncado"]
+    if r.get("ocr"):
+        meta["ocr"] = r["ocr"]  # paginas leidas por OCR: texto menos confiable (ver cnv/ocr.py)
+    if r.get("escaneado"):
+        meta["escaneado"] = True  # se guarda igual (como antes), pero marcado: sirve para el OCR y para el informe de salud
+        if r.get("ocr_intentado"):
+            meta["ocr_intentado"] = True
     if fallos:
         meta["parcial"] = len(fallos)
         meta["error"] = "; ".join(f"{f['archivo']}: {f['motivo']}" for f in fallos)[:120]
     return meta
 
 
-_VOLATILES = ("error", "parcial", "trunc", "escaneado")
+_VOLATILES = ("error", "parcial", "trunc", "escaneado", "ocr", "ocr_intentado")
 
 
 def _fusionar(previo: dict | None, meta: dict) -> dict:
@@ -130,6 +140,38 @@ def sincronizar_empresa(almacen, empresa: dict, desde: dt.date, tipos: tuple = T
     return {"nuevos": nuevos, "fallidos": fallidos, "pendientes": max(0, len(faltan) - nuevos - fallidos)}
 
 
+def reprocesar_escaneados(almacen, empresa: dict, limites: Limites | None = None, hasta_t: float | None = None, max_docs: int | None = None) -> dict:
+    """Vuelve a bajar los documentos que fallaron por ser imagen escaneada y les aplica OCR (requiere CNV_OCR=1).
+    Usa la URL guardada en el indice: no vuelve a consultar el listado de la CNV. Devuelve {"ocr","sin_texto","pendientes"}."""
+    if not ocr.activado():
+        return {"ocr": 0, "sin_texto": 0, "pendientes": 0, "error": "CNV_OCR no esta activado"}
+    try:
+        ocr.comprobar(ocr.configuracion()["idioma"])
+    except ocr.OcrNoDisponible as error:  # sin tesseract no se toca nada: los documentos quedan para una corrida con el entorno completo
+        return {"ocr": 0, "sin_texto": 0, "pendientes": 0, "error": str(error)}
+    indice = alm.leer_indice_empresa(almacen, empresa["cuit"])
+    por_id = {m["id"]: m for m in indice}
+    cola = [m for m in indice if m.get("escaneado") and not m.get("ocr") and not m.get("ocr_intentado") and m.get("t") in TIPOS_TEXTO]
+    if max_docs is not None:
+        cola = cola[:max_docs]
+    hechos = sin_texto = 0
+    try:
+        for m in cola:
+            if hasta_t and time.monotonic() > hasta_t:
+                break
+            d = {"doc_id": m["id"], "fecha": m.get("f"), "tipo": m["t"], "seccion": m.get("s", ""), "descripcion": m.get("d", ""), "url": m["u"]}
+            nuevo = _procesar(almacen, empresa, d, m, limites, hasta_t)
+            por_id[m["id"]] = _fusionar(m, nuevo)
+            leido = bool(nuevo.get("ocr"))
+            hechos += leido
+            sin_texto += not leido
+            if (hechos + sin_texto) % GUARDAR_CADA == 0:
+                alm.guardar_indice_empresa(almacen, empresa["cuit"], sorted(por_id.values(), key=lambda x: int(x["id"]), reverse=True))
+    finally:
+        alm.guardar_indice_empresa(almacen, empresa["cuit"], sorted(por_id.values(), key=lambda x: int(x["id"]), reverse=True))
+    return {"ocr": hechos, "sin_texto": sin_texto, "pendientes": len(cola) - hechos - sin_texto}
+
+
 def construir_indice_global(almacen, empresas: list) -> int:
     """Junta los indices por empresa en cnv/indice/global.json.gz (solo documentos con texto)."""
     filas = []
@@ -139,6 +181,8 @@ def construir_indice_global(almacen, empresas: list) -> int:
                 fila = {k: m.get(k) for k in ("id", "c", "e", "f", "t", "s", "d", "u", "p", "n", "r", "k")}
                 if m.get("trunc"):  # solo cuando existe: avisa al buscador que el texto no cubre todo el documento
                     fila["tr"] = m["trunc"]["motivo"]
+                if m.get("ocr"):  # texto reconocido por OCR: puede tener errores de lectura
+                    fila["oc"] = m["ocr"]
                 filas.append(fila)
     filas.sort(key=lambda m: (m["f"] or "", m["id"]), reverse=True)
     almacen.guardar("cnv/indice/global.json.gz", gzip.compress(json.dumps(filas, ensure_ascii=False, separators=(",", ":")).encode("utf-8")))

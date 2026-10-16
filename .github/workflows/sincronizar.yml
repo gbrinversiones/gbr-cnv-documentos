@@ -59,8 +59,35 @@ jobs:
           python -m cnv sync --desde "$DESDE" --tipos "${{ github.event.inputs.tipos || 'hechos,estados_contables,prospectos,avisos_pago,actas' }}" \
             --fragmento "${{ matrix.fragmento }}/4" --tiempo-max "${{ github.event.inputs.tiempo_max || '18000' }}"
 
-  indice:
+  # OCR opcional de los PDF escaneados. Va en un job aparte porque necesita paquetes del sistema (tesseract con
+  # idioma espanol, poppler) y es lento; si falla (apt caido, sin tesseract) no frena nada: continue-on-error.
+  ocr:
     needs: descargar
+    if: always()
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    env:
+      GCS_BUCKET: ${{ vars.GCS_BUCKET }}
+      GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
+      CNV_OCR: "1"
+      CNV_OCR_MAX_PAGINAS: ${{ vars.CNV_OCR_MAX_PAGINAS || '40' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Instalar tesseract (espanol) y poppler
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y tesseract-ocr tesseract-ocr-spa poppler-utils
+      - run: pip install -r requirements.txt -r requirements-ocr.txt
+      - name: OCR de documentos escaneados (max 30 por empresa)
+        run: python -m cnv ocr --max-docs 30 --tiempo-max 6000
+
+  indice:
+    needs: [descargar, ocr]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 30

@@ -301,7 +301,8 @@ def candidatos(almacen, empresas: list) -> list:
     for e in empresas:
         estado = leer_avisos(almacen, e["cuit"])
         for m in alm.leer_indice_empresa(almacen, e["cuit"]):
-            if m.get("t") == "avisos_pago" and m.get("texto_ok") and not ya_procesado(estado, m["id"]):
+            # documentos leidos por OCR quedan afuera: un digito mal leido igual "verificaria" contra su propia cita
+            if m.get("t") == "avisos_pago" and m.get("texto_ok") and not m.get("ocr") and not ya_procesado(estado, m["id"]):
                 salida.append((e, m))
     salida.sort(key=lambda x: (x[1].get("f") or "", int(x[1]["id"])), reverse=True)
     return salida

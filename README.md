@@ -7,6 +7,8 @@ Descarga los documentos **públicos** que las empresas argentinas presentan en l
 - `python -m cnv sync`: lista los documentos de cada empresa, baja los que faltan, extrae el texto de los PDF (también los que vienen en ZIP) y guarda el texto y un índice por empresa. Tipos con texto: `hechos`, `estados_contables`, `prospectos` (prospectos, suplementos, avisos de suscripción y de resultado), `avisos_pago` (sección «Aviso de Pago») y `actas` (de directorio y de comisión fiscalizadora). Cualquier otra sección de la CNV queda como metadato (`t = "otros"`), sin texto.
 - `python -m cnv indice`: arma el índice global que usa el buscador.
 - `python -m cnv financieros`: extrae cifras clave de los estados contables ya descargados (ver abajo).
+- `python -m cnv escaneados`: cuenta los PDF escaneados del universo según los marcadores (solo lee).
+- `python -m cnv ocr`: OCR opcional de los PDF escaneados (ver abajo).
 - `python -m cnv clasificar`: asigna una categoría cerrada (`k`) a cada hecho relevante (ver abajo).
 - `python -m cnv avisos-pago`: estructura los avisos de pago de ONs ya descargados (ver abajo).
 - El workflow `Sincronizar documentos CNV` corre todos los días (y se puede disparar a mano para cargas grandes).
@@ -66,6 +68,17 @@ Cada hecho relevante con texto recibe `k` en el índice por empresa y en `cnv/in
 ```
 export ANTHROPIC_API_KEY=...
 python -m cnv clasificar --max 100
+```
+
+## PDF escaneados y OCR opcional (`cnv/ocr.py`)
+- **Marcador:** un documento cuyo texto extraído tiene menos de 25 caracteres por página (solo las marcas `[pagina N]`) queda con `escaneado: true` en el índice por empresa. Se guarda igual que antes. (Antes de esta versión ese marcador casi nunca se activaba; los documentos viejos no lo tienen: para esos vale `procesados[*].estado == "escaneado"` de `financieros`.) `python -m cnv escaneados` cuenta ambos marcadores por tipo y empresa.
+- **OCR (apagado por defecto):** `CNV_OCR=1` activa `pytesseract` + `pdf2image`; el sync normal, si la variable está puesta, lee por OCR los PDF escaneados al bajarlos, y `python -m cnv ocr` reprocesa los ya marcados (usa la URL guardada, no vuelve a consultar el listado de la CNV). `CNV_OCR_MAX_PAGINAS` (40), `CNV_OCR_IDIOMA` (`spa`), `CNV_OCR_DPI` (200). Si falta tesseract, el idioma o poppler no se toca nada y el documento no queda como «intentado».
+- **Marca de calidad:** lo leído por OCR queda con `ocr` = páginas reconocidas (índice por empresa) y `oc` en el índice global; si se cortó por el tope, `trunc.motivo = "ocr_paginas"`. **`financieros` y `avisos-pago` no usan documentos con OCR**: un dígito mal leído igual «verificaría» contra su propia cita.
+- **Workflow:** job `ocr` aparte (instala `tesseract-ocr`, `tesseract-ocr-spa`, `poppler-utils` y `requirements-ocr.txt`), con `continue-on-error`; el job `indice` corre después aunque falle.
+```
+sudo apt-get install -y tesseract-ocr tesseract-ocr-spa poppler-utils && pip install -r requirements-ocr.txt
+python -m cnv escaneados                      # cuantos hay
+CNV_OCR=1 python -m cnv ocr --solo 30546689979 --max-docs 3
 ```
 
 ## Configuración (repo)
