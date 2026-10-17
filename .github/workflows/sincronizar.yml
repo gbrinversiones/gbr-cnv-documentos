@@ -195,6 +195,10 @@ jobs:
         if: always()
         continue-on-error: true
         run: python -m cnv cobertura
+      - name: Perfiles de emisor (texto plantilla con datos verificados; sin modelo)
+        if: always()
+        continue-on-error: true
+        run: python -m cnv perfiles
       - name: Salud de la base (resumen del job)
         if: always()
         continue-on-error: true

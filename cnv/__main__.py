@@ -11,6 +11,7 @@
   python -m cnv escaneados                       # cuenta los PDF escaneados segun los marcadores (solo lee)
   python -m cnv ocr [--max-docs N] [--tiempo-max 7200]   # OCR de los escaneados; requiere tesseract (ver cnv/ocr.py)
   python -m cnv novedades [--dias 7] [--hoy AAAA-MM-DD]   # documentos nuevos y lo presentado en los ultimos dias (sin modelo)
+  python -m cnv perfiles [--ons data/ons.csv]   # perfil de emisor en texto plantilla con datos verificados (sin modelo)
   python -m cnv eventos [--max 150] [--solo CUIT]   # eventos tipados de hechos relevantes (dividendos, emision ON, recompra, asamblea, M&A)
   python -m cnv calidad [--n 30] [--salida ARCHIVO]   # muestra determinista de periodos con revision cruzada (sin modelo)
   python -m cnv exportar   # CSV para analistas en cnv/export/ + diccionario.md (sin modelo)
@@ -44,6 +45,7 @@ from . import escaneados as esc
 from . import eventos as eve
 from . import novedades as nov
 from . import ocr
+from . import perfiles as per
 from . import ratios as rat
 from . import salud
 from . import universo as uni
@@ -112,6 +114,9 @@ def main(argv=None) -> int:
     co = sub.add_parser("cobertura")
     co.add_argument("--ons", default="data/ons.csv", help="CSV de ONs con el CUIT de cada emisor")
     co.add_argument("--hoy", default=None, help="AAAA-MM-DD (para reproducir un informe)")
+    pf = sub.add_parser("perfiles")
+    pf.add_argument("--ons", default="data/ons.csv", help="CSV de ONs con el CUIT de cada emisor")
+    pf.add_argument("--hoy", default=None, help="AAAA-MM-DD (para reproducir un informe)")
     ev = sub.add_parser("eventos")
     ev.add_argument("--max", type=int, default=150, help="maximo de hechos enviados al modelo por corrida (controla el costo)")
     ev.add_argument("--solo", default=None, help="CUIT: procesa solo esa empresa")
@@ -221,6 +226,10 @@ def main(argv=None) -> int:
     if a.cmd == "cobertura":
         r = cob.construir(almacen, universo, cob.leer_ons(a.ons), dt.date.fromisoformat(a.hoy) if a.hoy else None)
         print("TOTAL", json.dumps(r, ensure_ascii=False))
+        return 0
+
+    if a.cmd == "perfiles":
+        print("TOTAL", json.dumps(per.construir(almacen, universo, cob.leer_ons(a.ons), dt.date.fromisoformat(a.hoy) if a.hoy else None), ensure_ascii=False))
         return 0
 
     if a.cmd == "eventos":
