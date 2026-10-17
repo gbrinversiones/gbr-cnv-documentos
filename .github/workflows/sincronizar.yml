@@ -93,6 +93,9 @@ jobs:
     needs: [descargar, ocr]
     if: always()
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write         # solo para el issue diario de anomalias (paso «Alertas de salud»)
     timeout-minutes: 300  # topes propios de cada paso (~120 min con cupo 1; ~330 con cupo 4 que NO entra: usar cupo <= 3); con 30 se cancelaba a mitad
     env:
       CUPO_MODELO: ${{ github.event.inputs.cupo_modelo || '1' }}
@@ -182,6 +185,23 @@ jobs:
         if: always()
         continue-on-error: true
         run: python -m cnv salud >> "$GITHUB_STEP_SUMMARY"
+      - name: Alertas de salud (un issue por dia como maximo, solo si hay anomalias)
+        if: always()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python -m cnv salud --anomalias salud_anomalias.md
+          if [ -s salud_anomalias.md ]; then
+            hoy=$(date -u +%F)
+            gh label create salud-cnv --color D93F0B --description "Anomalias detectadas por python -m cnv salud" 2>/dev/null || true
+            ya=$(gh issue list --label salud-cnv --state all --search "created:>=$hoy" --json number --jq 'length')
+            if [ "$ya" = "0" ]; then
+              gh issue create --label salud-cnv --title "Salud CNV: anomalias del $hoy" --body-file salud_anomalias.md
+            else
+              echo "Ya hay un issue de salud de hoy: no se crea otro."
+            fi
+          fi
       - name: Novedades de los ultimos 7 dias (segunda pasada)
         if: always()
         continue-on-error: true
