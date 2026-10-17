@@ -9,6 +9,7 @@
   python -m cnv escaneados                       # cuenta los PDF escaneados segun los marcadores (solo lee)
   python -m cnv ocr [--max-docs N] [--tiempo-max 7200]   # OCR de los escaneados; requiere tesseract (ver cnv/ocr.py)
   python -m cnv novedades [--dias 7] [--hoy AAAA-MM-DD]   # documentos nuevos y lo presentado en los ultimos dias (sin modelo)
+  python -m cnv exportar   # CSV para analistas en cnv/export/ + diccionario.md (sin modelo)
   python -m cnv cobertura [--ons data/ons.csv] [--hoy AAAA-MM-DD]   # cruce emisores/ONs con documentos y datos (sin modelo)
   python -m cnv auditar-cifras                    # inconsistencias contables en cnv/financieros; las cifras marcadas quedan fuera de los ratios (sin modelo)
   python -m cnv condiciones [--max 100] [--solo CUIT] [--tiempo-max 1200] [--solo-indice]   # condiciones de emision de las ON (prospectos/suplementos/avisos)
@@ -31,6 +32,7 @@ from . import avisos_pago as avp
 from . import busqueda as bus
 from . import clasificacion as cla
 from . import cobertura as cob
+from . import exportar as exp
 from . import condiciones as cond
 from . import escaneados as esc
 from . import novedades as nov
@@ -99,6 +101,7 @@ def main(argv=None) -> int:
     co = sub.add_parser("cobertura")
     co.add_argument("--ons", default="data/ons.csv", help="CSV de ONs con el CUIT de cada emisor")
     co.add_argument("--hoy", default=None, help="AAAA-MM-DD (para reproducir un informe)")
+    sub.add_parser("exportar")
     bq = sub.add_parser("busqueda")
     bq.add_argument("--tiempo-max", type=int, default=1500, help="segundos; si no alcanza NO se publica nada (el indice anterior sigue valiendo)")
     cl = sub.add_parser("clasificar")
@@ -181,6 +184,10 @@ def main(argv=None) -> int:
     if a.cmd == "cobertura":
         r = cob.construir(almacen, universo, cob.leer_ons(a.ons), dt.date.fromisoformat(a.hoy) if a.hoy else None)
         print("TOTAL", json.dumps(r, ensure_ascii=False))
+        return 0
+
+    if a.cmd == "exportar":
+        print("TOTAL", json.dumps(exp.construir(almacen, universo), ensure_ascii=False))
         return 0
 
     if a.cmd == "auditar-cifras":
