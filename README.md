@@ -97,6 +97,18 @@ Una cifra puede estar bien respaldada por su cita y aun así estar mal (otra fil
 - **Formato:** `{"version":1,"resumen":{periodos, hallazgos, por_regla, periodos_con_cifras_sospechosas, cifras_sospechosas},"hallazgos":[{cuit, empresa, doc, periodo, tipo, balance, regla, severidad, campos, detalle}],"sospechosas":{cuit:{doc_id:[campo]}}}`. Severidad `sospechosa` = queda fuera de los ratios; `info` = solo se informa.
 - **Limitaciones conocidas:** el patrimonio que extrae `financieros` puede ser el atribuible a los propietarios (sin participaciones no controladoras); en grupos con minoritarios importantes `balance_no_cuadra` puede dar falsos positivos y excluir endeudamiento y ROE de ese periodo (queda registrado con el desvío exacto en `detalle`). Es el costo de preferir un ratio ausente a uno dudoso. La regla de saltos también puede marcar crecimiento real de más de 50 veces (poco probable entre periodos consecutivos).
 
+## Eventos estructurados de hechos relevantes (`cnv/eventos.py`)
+Para alimentar un calendario de eventos. `python -m cnv eventos [--max 150] [--solo CUIT] [--tiempo-max 900] [--solo-indice]` toma los hechos relevantes **ya clasificados** (`k`) en `dividendos`, `emision_on`, `recompra_acciones`, `convocatoria_asamblea` o `adquisicion_venta` y saca campos tipados con `claude-haiku-5-5` (esquema JSON por categoría, `thinking` apagado), con la **misma regla de cita literal verificada**: cada dato lleva una cita de 3 a 60 palabras que tiene que estar literalmente en el texto del documento, y además los números tienen que estar enteros en la cita (los porcentajes, con el signo `%` o «por ciento»), las fechas en algún formato de la cita, las categorías respaldadas por palabras de la cita («ordinaria» no se acepta si la cita dice «extraordinaria») y los textos como fragmento literal de la cita. Lo que no se respalda se descarta con motivo en `procesados[doc].descartados`. Un evento exige al menos un dato clave.
+| Categoría | Campos |
+|---|---|
+| `dividendos` | `monto_total`, `monto_por_accion`, `moneda` (pesos/dólares), `fecha_pago`, `fecha_registro` |
+| `emision_on` | `clase`, `monto`, `moneda` (pesos/dólares/uva/dólar linked), `tasa` (%) |
+| `recompra_acciones` | `monto_maximo`, `moneda`, `plazo` (texto literal), `precio_maximo` |
+| `convocatoria_asamblea` | `fecha`, `tipo_asamblea` (ordinaria/extraordinaria/ordinaria_y_extraordinaria), `orden_del_dia` (hasta 12 puntos, cada uno un fragmento literal con su cita; sin resumir) |
+| `adquisicion_venta` | `contraparte` (texto literal), `porcentaje` (%), `monto`, `moneda` |
+- **Salidas:** `cnv/eventos/{cuit}.json` (`eventos` con campos, citas y página; `procesados` con versión, categoría, estado y descartados) y `cnv/indice/eventos.json.gz` = `{"version":1,"filas":[{cuit, empresa, doc, categoria, fecha, fecha_presentacion, url, datos, citas, ambiguo}]}` **ordenado por `fecha` descendente**. `fecha` es la que ubica el evento en un calendario: pago (o registro) del dividendo, fecha de la asamblea; para el resto, la de presentación del hecho. `datos` trae los valores tal cual figuran (sin convertir) y `citas` la cita y página de cada uno.
+- **Idempotente:** por versión del extractor **y categoría** (si el hecho se reclasifica se vuelve a extraer); se guarda tras cada documento; errores de API hasta 3 intentos. Los hechos leídos por OCR no se usan. `--max` cuenta hechos enviados al modelo. Corre en el job `indice` después de `clasificar` (necesita la categoría). `salud` suma `eventos` al atraso por etapa.
+
 ## Calidad de las cifras (`cnv/calidad.py`, `docs/CALIDAD.md`)
 `python -m cnv calidad [--n 30] [--salida ARCHIVO]` toma una muestra **determinista** de períodos (ordenados por un hash del documento) y les aplica una revisión cruzada sin modelo ni red: el balance cuadra, los ratios caen en rangos plausibles (`RANGOS`; fuera de rango es «revisar», no error), escala y moneda coinciden con el período anterior del mismo emisor y balance, toda cifra tiene cita y página, y no hay hallazgos de la auditoría. Veredicto por período: `ok`, `revisar` o `sospechoso`; además cuenta los patrones de la auditoría en toda la base. Sale en el resumen del job `indice`. `docs/CALIDAD.md` documenta los patrones de error medidos y lo que se corrigió. La auditoría ahora compara las monedas normalizadas (`moneda_canonica`: «Pesos Argentinos», «ARS» y «$» son la misma moneda), porque el texto tal cual contaba como cambio de moneda a 39 de los 69 hallazgos de la primera corrida completa.
 
@@ -273,6 +285,9 @@ Ver «Novedades». `vistos.json` es estado interno entre corridas (no lo lee la 
 ### `cnv/indice/auditoria_cifras.json.gz`
 Ver «Auditoría de cifras».
 
+### `cnv/eventos/{cuit}.json` y `cnv/indice/eventos.json.gz`
+Ver «Eventos estructurados de hechos relevantes». `eventos[]`: `{doc, categoria, empresa, fecha_presentacion, url, descripcion, campos}` con `campos{campo}` = `{valor, cita, pagina}` (los numéricos suman `texto`, `moneda_en_cita` y `ambiguo` si el formato admite dos lecturas; `orden_del_dia` es una lista). `procesados{doc}`: `{v, estado (ok|no_es_evento|sin_datos|escaneado|error), categoria, fecha, descartados?, intentos?}`. Índice: ver la sección.
+
 ### `cnv/condiciones/{cuit}.json` y `cnv/indice/condiciones.json.gz`
 Ver «Condiciones de emisión de las ON».
 
@@ -306,6 +321,7 @@ Modelo: `claude-haiku-5-5`, **US$ 0,10 por millón de tokens de entrada y US$ 0,
 | Categoría (`clasificar`) | hecho relevante | ≈ 2.200 (hasta 6.000 caracteres + instrucciones) | ≈ 40; un 2.º pedido si la cita no figura | ≈ US$ 0,00024 (≈ 0,0003 con reintentos) | ≈ US$ 0,25–0,35 |
 | Cifras (`financieros`, versión 5: 19 cifras) | estado contable | ≈ 16.200 (recorte de hasta 43.000 caracteres; las instrucciones suman ≈ 250 tokens y el estado de flujo de efectivo ahora entra en el recorte) | ≈ 1.100 (máx. 4.096; ≈ 300 más por las 7 cifras nuevas) | ≈ US$ 0,0022 (máx. ≈ 0,004) | ≈ US$ 2–4; **completar** los ya procesados con `--completar-campos` ≈ US$ 0,002 × documentos |
 | Condiciones de emisión (`condiciones`) | prospecto / suplemento / aviso | ≈ 12.000 (recorte de hasta 40.000 caracteres) | ≈ 1.200 (máx. 6.000) | ≈ US$ 0,002 (máx. ≈ 0,005) | ≈ US$ 2–5 |
+| Eventos (`eventos`) | hecho relevante de dividendos / emisión ON / recompra / asamblea / M&A | ≈ 2.500 (hasta 20.000 caracteres ≈ 7.000 + ≈ 450 de instrucciones) | ≈ 250 (máx. 2.500) | ≈ US$ 0,0004 (máx. ≈ 0,0011) | ≈ US$ 0,4–1 (solo los hechos de esas 5 categorías; estimado) |
 | Avisos de pago (`avisos-pago`) | aviso con datos | ≈ 2.000 (hasta 20.000 caracteres ≈ 7.000) | ≈ 350 | ≈ US$ 0,0004 (máx. ≈ 0,001) | ≈ US$ 0,4–1 |
 | Avisos de pago, formulario | formulario sin valores | — | — | **US$ 0** el aviso sin OCR; el OCR es CPU, no modelo | 0 |
 | Búsqueda (`busqueda`), OCR, salud, universo | — | — | — | **US$ 0** (sin modelo) | 0 |
@@ -315,7 +331,7 @@ Modelo: `claude-haiku-5-5`, **US$ 0,10 por millón de tokens de entrada y US$ 0,
 ## Tiempos de carga
 **Mediciones reales: ninguna** (no tengo acceso a la CNV ni al bucket). Lo que sigue son topes de configuración y un modelo simple para dimensionar.
 - **Descarga (`sync`)**: la CNV manda. Cada documento son ≥ 3 pedidos (página, llave, archivo) con hasta 4 reintentos por adjunto y tope de 15 minutos por documento. El workflow corre 4 fragmentos en paralelo × 3 hilos = 12 documentos a la vez, con un tope de 5 horas por fragmento. Capacidad por corrida = 12 × 18.000 s ÷ segundos por documento: **si cada documento tarda 10 s, ≈ 21.000 por corrida; a 20 s, ≈ 10.800; a 60 s, ≈ 3.600**. Lo que no entra queda pendiente y se retoma en la corrida siguiente (idempotente).
-- **Etapas con modelo** (por corrida, topes del workflow): `financieros` ≤ 150 documentos y 20 min; `resumenes` ≤ 400 y 25 min; `clasificar` ≤ 500 y 15 min; `avisos-pago` ≤ 200 y 15 min. Una carga histórica grande se hace repitiendo el workflow manual hasta que `pendientes` sea 0 (o subiendo `--max`).
+- **Etapas con modelo** (por corrida, topes del workflow): `financieros` ≤ 150 documentos y 20 min; `resumenes` ≤ 400 y 25 min; `clasificar` ≤ 500 y 15 min; `avisos-pago` ≤ 200 y 15 min; `eventos` ≤ 150 y 15 min. Una carga histórica grande se hace repitiendo el workflow manual hasta que `pendientes` sea 0 (o subiendo `--max`).
 - **Índice de búsqueda**: ≤ 25 min; en una simulación local con 20.000 documentos sintéticos tardó ≈ 40 s con disco local (con GCS domina la lectura de los textos).
 - **OCR**: job aparte de hasta 150 min; el tope práctico es `CNV_OCR_MAX_PAGINAS` (40) por documento.
 - **Salud / universo / escaneados**: segundos a minutos; `universo --verificar` hace una consulta por empresa (≈ 121) con pausa de 0,5 s.

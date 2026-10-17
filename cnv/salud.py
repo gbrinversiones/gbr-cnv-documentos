@@ -13,6 +13,7 @@ from . import almacen as alm
 from . import avisos_pago as _avisos
 from . import clasificacion as _clasificacion
 from . import condiciones as _condiciones
+from . import eventos as _eventos
 from . import financieros as _financieros
 from . import resumenes as _resumenes
 from .avisos_pago import leer_avisos
@@ -120,7 +121,7 @@ def atraso(almacen, empresas: list) -> dict:
     sin_bajar = sum(1 for e in con_cuit for m in alm.leer_indice_empresa(almacen, e["cuit"]) if not m.get("texto_ok") and m.get("t") in TIPOS_TEXTO and m.get("intentos", 0) < MAX_INTENTOS)
     return {"descargas": sin_bajar, "financieros": len(_financieros.candidatos(almacen, con_cuit)), "resumenes": len(_resumenes.pendientes(almacen, con_cuit)),
             "clasificar": len(_clasificacion.pendientes(almacen, con_cuit)), "avisos_pago": len(_avisos.candidatos(almacen, con_cuit)),
-            "condiciones": len(_condiciones.candidatos(almacen, con_cuit))}
+            "condiciones": len(_condiciones.candidatos(almacen, con_cuit)), "eventos": len(_eventos.candidatos(almacen, con_cuit))}
 
 
 def errores_recurrentes(almacen, empresas: list) -> list:
