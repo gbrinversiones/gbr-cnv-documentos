@@ -9,6 +9,7 @@ Reglas (cada hallazgo lleva `regla`, `severidad`, `campos` y `detalle`):
   resultado_neto_mayor_que_ventas    resultado_neto > ventas (ventas > 0); idem resultado_operativo
   signo_raro                         ventas, activos, pasivos, efectivo, deuda o depreciaciones negativos
   parte_mayor_que_el_todo            activo_corriente > activo_total, pasivo_corriente > pasivo_total, efectivo > activo_total, deuda_financiera > pasivo_total
+  deuda_no_cuadra                    deuda corriente + no corriente difiere de deuda_financiera (el total) en mas de 5%
   salto_entre_periodos               una cifra (en unidades absolutas) cambia mas de 50x entre dos periodos consecutivos del mismo emisor
   unidad_incoherente                 el salto de arriba coincide con un cambio de escala declarada (miles <-> millones <-> unidades)
   escala_cambia / moneda_cambia      (info) el emisor cambio de unidad o de moneda entre periodos; no se marca ninguna cifra
@@ -27,9 +28,14 @@ from .financieros import leer_financieros
 VERSION = 1
 TOLERANCIA = 0.01           # 1% para el balance y para "parte mayor que el todo"
 SALTO_MAXIMO = 50           # veces entre periodos consecutivos
-NO_NEGATIVOS = ("ventas", "activo_total", "pasivo_total", "efectivo", "deuda_financiera", "activo_corriente", "pasivo_corriente", "depreciaciones_amortizaciones")
-PARTES = (("activo_corriente", "activo_total"), ("pasivo_corriente", "pasivo_total"), ("efectivo", "activo_total"), ("deuda_financiera", "pasivo_total"))
-EN_SERIE = ("ventas", "activo_total", "pasivo_total", "patrimonio_neto", "deuda_financiera", "efectivo", "activo_corriente", "pasivo_corriente")   # cifras comparables entre periodos
+NO_NEGATIVOS = ("ventas", "activo_total", "pasivo_total", "efectivo", "deuda_financiera", "activo_corriente", "pasivo_corriente", "depreciaciones_amortizaciones",
+                "caja_equivalentes", "deuda_financiera_corriente", "deuda_financiera_no_corriente")   # flujo operativo, capex, dividendos y resultado por accion pueden tener cualquier signo segun como se presenten
+PARTES = (("activo_corriente", "activo_total"), ("pasivo_corriente", "pasivo_total"), ("efectivo", "activo_total"), ("deuda_financiera", "pasivo_total"),
+          ("caja_equivalentes", "activo_corriente"), ("caja_equivalentes", "activo_total"), ("deuda_financiera_corriente", "pasivo_corriente"),
+          ("deuda_financiera_corriente", "pasivo_total"), ("deuda_financiera_no_corriente", "pasivo_total"))
+TOLERANCIA_DEUDA = 0.05     # la suma corriente + no corriente puede diferir del total por definicion (arrendamientos, derivados): se tolera 5%
+EN_SERIE = ("ventas", "activo_total", "pasivo_total", "patrimonio_neto", "deuda_financiera", "efectivo", "activo_corriente", "pasivo_corriente",
+            "caja_equivalentes", "deuda_financiera_corriente", "deuda_financiera_no_corriente")   # cifras comparables entre periodos
 ESCALAS = (1, 1_000, 1_000_000)
 
 
@@ -72,6 +78,13 @@ def auditar_periodo(p: dict) -> list:
         x, y = _v(p, parte), _v(p, todo)
         if x is not None and y is not None and x >= 0 and y > 0 and x > y * (1 + TOLERANCIA):
             hs.append(_h(p, "parte_mayor_que_el_todo", [parte, todo], f"{parte} {x:g} supera a {todo} {y:g}"))
+    capex, activo = _v(p, "inversiones_capex"), _v(p, "activo_total")
+    if capex is not None and activo is not None and activo > 0 and abs(capex) > activo * (1 + TOLERANCIA):
+        hs.append(_h(p, "parte_mayor_que_el_todo", ["inversiones_capex", "activo_total"], f"|inversiones_capex| {abs(capex):g} supera al activo_total {activo:g}"))
+    dc, dn, dt_ = _v(p, "deuda_financiera_corriente"), _v(p, "deuda_financiera_no_corriente"), _v(p, "deuda_financiera")
+    if dc is not None and dn is not None and dt_ is not None and dt_ > 0 and abs(dc + dn - dt_) > TOLERANCIA_DEUDA * dt_:
+        hs.append(_h(p, "deuda_no_cuadra", ["deuda_financiera_corriente", "deuda_financiera_no_corriente", "deuda_financiera"],
+                     f"corriente {dc:g} + no corriente {dn:g} = {dc + dn:g} vs deuda_financiera {dt_:g}: diferencia de {abs(dc + dn - dt_) / dt_:.1%} (tolerancia {TOLERANCIA_DEUDA:.0%})"))
     return hs
 
 

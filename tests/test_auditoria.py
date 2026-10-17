@@ -236,3 +236,51 @@ def test_cli_auditar_cifras(base, monkeypatch, capsys):
     monkeypatch.setattr(cli, "cargar_universo", lambda: [EMP, OTRA])
     assert cli.main(["auditar-cifras"]) == 0
     assert '"hallazgos": 2' in capsys.readouterr().out and base.existe("cnv/indice/auditoria_cifras.json.gz")
+
+
+# --- Fase 16: flujo y deuda ---------------------------------------------------------------------
+
+def hs16(**cifras):
+    return aud.auditar_periodo(periodo(**cifras))
+
+
+def test_caja_mayor_que_el_activo_corriente_es_sospechosa():
+    assert reglas(hs16(caja_equivalentes=9_500, activo_corriente=9_000)) == [("parte_mayor_que_el_todo", ("activo_corriente", "caja_equivalentes"))]
+    assert hs16(caja_equivalentes=9_000, activo_corriente=9_000) == [] and hs16(caja_equivalentes=9_050, activo_corriente=9_000) == []   # tolerancia 1%
+
+
+def test_caja_mayor_que_el_activo_total_y_deuda_mayor_que_el_pasivo():
+    assert ("parte_mayor_que_el_todo", ("activo_total", "caja_equivalentes")) in reglas(hs16(caja_equivalentes=40_000, activo_total=35_000))
+    assert ("parte_mayor_que_el_todo", ("deuda_financiera_corriente", "pasivo_corriente")) in reglas(hs16(deuda_financiera_corriente=9_000, pasivo_corriente=8_400))
+    assert ("parte_mayor_que_el_todo", ("deuda_financiera_no_corriente", "pasivo_total")) in reglas(hs16(deuda_financiera_no_corriente=22_000, pasivo_total=21_000))
+
+
+def test_cajas_y_deudas_negativas_son_signo_raro_pero_flujos_y_dividendos_no():
+    assert reglas(hs16(caja_equivalentes=-1)) == [("signo_raro", ("caja_equivalentes",))]
+    assert reglas(hs16(deuda_financiera_corriente=-1)) == [("signo_raro", ("deuda_financiera_corriente",))]
+    assert hs16(flujo_efectivo_operativo=-5_000, inversiones_capex=-2_000, dividendos_pagados=-500, resultado_por_accion=-0.35) == []
+
+
+def test_capex_mayor_que_el_activo_total_con_cualquier_signo():
+    for capex in (-40_000, 40_000):
+        assert reglas(hs16(inversiones_capex=capex, activo_total=35_000)) == [("parte_mayor_que_el_todo", ("activo_total", "inversiones_capex"))]
+    assert hs16(inversiones_capex=-2_000, activo_total=35_000) == []
+
+
+@pytest.mark.parametrize("corriente,no_corriente,marca", [(4_000, 8_000, False), (4_000, 8_500, False), (4_000, 8_700, True), (1_000, 8_000, True)])
+def test_deuda_corriente_mas_no_corriente_debe_cerrar_con_el_total_dentro_del_5_por_ciento(corriente, no_corriente, marca):
+    hs = hs16(deuda_financiera=12_000, deuda_financiera_corriente=corriente, deuda_financiera_no_corriente=no_corriente)
+    assert bool(hs) is marca
+    if marca:
+        assert hs[0]["regla"] == "deuda_no_cuadra" and "diferencia" in hs[0]["detalle"]
+
+
+def test_deuda_no_cuadra_deja_los_ratios_de_deuda_en_null():
+    f = rat.ratios_de_periodo(periodo(**COMPLETO), {"deuda_financiera_corriente", "deuda_financiera_no_corriente", "deuda_financiera"})
+    assert f["ratios"]["fcf_deuda"] is None and f["ratios"]["deuda_neta_ebitda"] is None and f["ratios"]["cobertura_deuda_cp"] is None
+    assert f["ratios"]["liquidez_corriente"] == 1.5      # lo que no depende de esas cifras sigue calculandose
+
+
+def test_salto_de_la_caja_entre_periodos():
+    ps = [periodo(doc="1", periodo_="2024-12-31", caja_equivalentes=2_000), periodo(doc="2", periodo_="2025-12-31", caja_equivalentes=2_000_000)]
+    assert any(h["regla"] == "salto_entre_periodos" and h["campos"] == ["caja_equivalentes"] for h in aud.auditar_serie(ps))

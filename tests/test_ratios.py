@@ -22,15 +22,17 @@ def periodo(doc="10", periodo_="2025-12-31", tipo="anual", acumulado=True, moned
 
 
 COMPLETO = dict(activo_corriente=9_000, pasivo_corriente=6_000, pasivo_total=21_000, patrimonio_neto=14_000, deuda_financiera=12_000,
-                resultado_operativo=3_000, depreciaciones_amortizaciones=1_000, resultado_neto=1_400, ventas=20_000, intereses=-1_500)
+                resultado_operativo=3_000, depreciaciones_amortizaciones=1_000, resultado_neto=1_400, ventas=20_000, intereses=-1_500,
+                caja_equivalentes=2_000, deuda_financiera_corriente=4_000, deuda_financiera_no_corriente=8_000, flujo_efectivo_operativo=5_000, inversiones_capex=-2_000)
 
 
 # --- casos felices -----------------------------------------------------------------
 
 def test_todos_los_ratios_de_un_balance_anual_completo():
     f = rat.ratios_de_periodo(periodo(**COMPLETO))
-    assert f["ratios"] == {"liquidez_corriente": 1.5, "endeudamiento": 1.5, "deuda_ebitda": 3.0, "margen_neto": 0.07, "roe": 0.1, "cobertura_intereses": 2.0}
-    assert f["motivos"] == {} and f["derivados"] == {"ebitda": 4000}
+    assert f["ratios"] == {"liquidez_corriente": 1.5, "endeudamiento": 1.5, "deuda_ebitda": 3.0, "margen_neto": 0.07, "roe": 0.1, "cobertura_intereses": 2.0,
+                          "deuda_neta_ebitda": 2.5, "cobertura_deuda_cp": 0.5, "fcf_deuda": 0.25}
+    assert f["motivos"] == {} and f["derivados"] == {"ebitda": 4000, "deuda_total": 12000, "deuda_neta": 10000, "fcf": 3000}
     assert f["insumos"]["pasivo_corriente"] == {"valor": 6000, "pagina": 3} and f["doc"] == "10" and f["balance"] == "consolidado"
     assert set(f["insumos"]) == {c for e in rat.ENTRADAS.values() for c in e}
 
@@ -189,7 +191,7 @@ def test_estadisticas_cuentan_los_motivos_sin_el_detalle(tmp_path):
     a = alm.AlmacenLocal(str(tmp_path))
     guardar(a, [periodo(doc="10", **{k: v for k, v in COMPLETO.items() if k != "ventas"}), periodo(doc="11", tipo="semestral", periodo_="2025-06-30", **COMPLETO)])
     s = rat.construir(a, [EMP])
-    assert s["motivos"] == {"falta_cifra": 1, "periodo_no_anual": 2} and s["calculados"]["liquidez_corriente"] == 2
+    assert s["motivos"] == {"falta_cifra": 1, "periodo_no_anual": 4} and s["calculados"]["liquidez_corriente"] == 2
 
 
 def test_idempotente_mismos_bytes(tmp_path):
@@ -212,7 +214,7 @@ def test_de_punta_a_punta_desde_un_balance_de_texto(tmp_path):
     assert f["doc"] == "7" and f["tipo"] == "semestral"
     assert f["ratios"]["liquidez_corriente"] == round(9_876_543 / 8_400_000, 6) and f["ratios"]["endeudamiento"] == 1.5 and f["ratios"]["margen_neto"] == round(1_250_000 / 18_400_250, 6)
     assert f["ratios"]["cobertura_intereses"] == round(3_300_250 / 1_100_000, 6)
-    assert f["motivos"] == {"deuda_ebitda": "periodo_no_anual", "roe": "periodo_no_anual"}      # semestral: no se anualiza
+    assert f["motivos"] == {"deuda_ebitda": "periodo_no_anual", "roe": "periodo_no_anual", "deuda_neta_ebitda": "periodo_no_anual", "fcf_deuda": "periodo_no_anual"}      # semestral: no se anualiza
 
 
 def test_cli_ratios(tmp_path, monkeypatch, capsys):
@@ -222,3 +224,57 @@ def test_cli_ratios(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(cli, "cargar_universo", lambda: [EMP])
     assert cli.main(["ratios"]) == 0
     assert "'periodos': 1" in capsys.readouterr().out and a.existe("cnv/indice/ratios.json.gz")
+
+
+# --- Fase 16: flujo y deuda ---------------------------------------------------------
+
+def ratios16(**cambios):
+    return rat.ratios_de_periodo(periodo(**{**COMPLETO, **cambios}))
+
+
+def test_ratios_de_flujo_y_deuda_con_valores_a_mano():
+    f = ratios16()
+    # deuda total 4.000 + 8.000 = 12.000; caja 2.000; EBITDA 3.000 + 1.000 = 4.000; flujo 5.000 - |capex| 2.000 = 3.000
+    assert f["ratios"]["deuda_neta_ebitda"] == 2.5 and f["ratios"]["cobertura_deuda_cp"] == 0.5 and f["ratios"]["fcf_deuda"] == 0.25
+    assert f["derivados"]["deuda_neta"] == 10_000 and f["derivados"]["fcf"] == 3_000
+
+
+def test_capex_cuenta_igual_con_signo_positivo_o_negativo():
+    assert ratios16(inversiones_capex=2_000)["ratios"]["fcf_deuda"] == ratios16(inversiones_capex=-2_000)["ratios"]["fcf_deuda"] == 0.25
+
+
+def test_caja_neta_da_deuda_neta_negativa_y_fcf_negativo_es_valido():
+    assert ratios16(caja_equivalentes=20_000)["ratios"]["deuda_neta_ebitda"] == -2.0
+    assert ratios16(flujo_efectivo_operativo=1_000)["ratios"]["fcf_deuda"] == round(-1_000 / 12_000, 6)
+
+
+def test_semestral_solo_calcula_lo_que_son_dos_saldos():
+    f = rat.ratios_de_periodo(periodo(tipo="semestral", **COMPLETO))
+    assert f["ratios"]["cobertura_deuda_cp"] == 0.5
+    assert f["motivos"]["deuda_neta_ebitda"] == f["motivos"]["fcf_deuda"] == "periodo_no_anual"
+
+
+@pytest.mark.parametrize("cambios,ratio,motivo", [
+    ({"caja_equivalentes": None}, "deuda_neta_ebitda", "falta_cifra:caja_equivalentes"),
+    ({"deuda_financiera_no_corriente": None}, "fcf_deuda", "falta_cifra:deuda_financiera_no_corriente"),
+    ({"deuda_financiera_corriente": None}, "cobertura_deuda_cp", "falta_cifra:deuda_financiera_corriente"),
+    ({"deuda_financiera_corriente": 0}, "cobertura_deuda_cp", "division_por_cero"),
+    ({"deuda_financiera_corriente": 0, "deuda_financiera_no_corriente": 0}, "fcf_deuda", "division_por_cero"),
+    ({"resultado_operativo": -1_000, "depreciaciones_amortizaciones": 0}, "deuda_neta_ebitda", "ebitda_negativo"),
+    ({"resultado_operativo": -1_000, "depreciaciones_amortizaciones": 1_000}, "deuda_neta_ebitda", "division_por_cero"),
+    ({"caja_equivalentes": -5}, "cobertura_deuda_cp", "caja_equivalentes_negativa"),
+    ({"deuda_financiera_no_corriente": -5}, "fcf_deuda", "deuda_financiera_no_corriente_negativa"),
+])
+def test_ratios_16_sin_dato_o_sin_sentido_quedan_null_con_motivo(cambios, ratio, motivo):
+    datos = {k: v for k, v in {**COMPLETO, **cambios}.items() if v is not None}
+    f = rat.ratios_de_periodo(periodo(**datos))
+    assert f["ratios"][ratio] is None and f["motivos"][ratio] == motivo
+
+
+def test_ratios_16_no_mezclan_unidades_ni_cifras_sospechosas():
+    p = periodo(**COMPLETO)
+    p["cifras"]["caja_equivalentes"]["valor"] = 2_000
+    assert rat.ratios_de_periodo(p, {"caja_equivalentes"})["motivos"]["deuda_neta_ebitda"] == "cifra_sospechosa:caja_equivalentes"
+    a = {c: rat.contexto(p, c) for c in rat.ENTRADAS["cobertura_deuda_cp"]}
+    a["caja_equivalentes"] = {**a["caja_equivalentes"], "escala": 1}
+    assert rat.calcular_ratio("cobertura_deuda_cp", a)[1] == "unidades_distintas"

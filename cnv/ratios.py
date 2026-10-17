@@ -22,10 +22,15 @@ ENTRADAS = {
     "margen_neto": ("resultado_neto", "ventas"),
     "roe": ("resultado_neto", "patrimonio_neto"),
     "cobertura_intereses": ("resultado_operativo", "intereses"),
+    # Fase 16 (cifras de flujo y deuda). La deuda total es corriente + no corriente (ambas deben figurar); no se mezcla con `deuda_financiera`.
+    "deuda_neta_ebitda": ("deuda_financiera_corriente", "deuda_financiera_no_corriente", "caja_equivalentes", "resultado_operativo", "depreciaciones_amortizaciones"),
+    "cobertura_deuda_cp": ("caja_equivalentes", "deuda_financiera_corriente"),
+    "fcf_deuda": ("flujo_efectivo_operativo", "inversiones_capex", "deuda_financiera_corriente", "deuda_financiera_no_corriente"),
 }
 # deuda/EBITDA y ROE mezclan un flujo (de todo el periodo) con una deuda o un patrimonio (a la fecha de cierre): solo son comparables con
 # 12 meses de flujo. No se anualizan periodos parciales (seria estimar): en trimestres y semestres quedan null.
-SOLO_ANUALES = ("deuda_ebitda", "roe")
+SOLO_ANUALES = ("deuda_ebitda", "roe", "deuda_neta_ebitda", "fcf_deuda")
+NO_NEGATIVOS_RATIO = ("caja_equivalentes", "deuda_financiera_corriente", "deuda_financiera_no_corriente")
 FORMULAS = {
     "liquidez_corriente": "activo_corriente / pasivo_corriente",
     "endeudamiento": "pasivo_total / patrimonio_neto",
@@ -33,6 +38,9 @@ FORMULAS = {
     "margen_neto": "resultado_neto / ventas",
     "roe": "resultado_neto / patrimonio_neto (a la fecha de cierre, no promedio); solo periodos anuales",
     "cobertura_intereses": "resultado_operativo / |intereses|",
+    "deuda_neta_ebitda": "(deuda_financiera_corriente + deuda_financiera_no_corriente - caja_equivalentes) / (resultado_operativo + |depreciaciones_amortizaciones|); solo periodos anuales; negativo = caja neta",
+    "cobertura_deuda_cp": "caja_equivalentes / deuda_financiera_corriente (veces; ambas a la fecha de cierre)",
+    "fcf_deuda": "(flujo_efectivo_operativo - |inversiones_capex|) / (deuda_financiera_corriente + deuda_financiera_no_corriente); solo periodos anuales",
 }
 
 
@@ -89,6 +97,9 @@ def calcular_ratio(nombre: str, insumos: dict, sospechosas=frozenset()) -> tuple
     if nombre in SOLO_ANUALES and not (ref["tipo"] == "anual" and ref["acumulado"]):
         return None, "periodo_no_anual", {}
     v = {c: insumos[c]["valor"] for c in campos}
+    negativos = [c for c in campos if c in NO_NEGATIVOS_RATIO and v[c] < 0]
+    if negativos and nombre in ("deuda_neta_ebitda", "cobertura_deuda_cp", "fcf_deuda"):
+        return None, f"{negativos[0]}_negativa", {}
     if nombre == "liquidez_corriente":
         if v["activo_corriente"] < 0:
             return None, "activo_corriente_negativo", {}
@@ -103,6 +114,21 @@ def calcular_ratio(nombre: str, insumos: dict, sospechosas=frozenset()) -> tuple
         return (*_div(v["resultado_neto"], v["patrimonio_neto"], "patrimonio"), {})
     if nombre == "cobertura_intereses":
         return (*_div(v["resultado_operativo"], abs(v["intereses"]), "intereses"), {})
+    if nombre == "cobertura_deuda_cp":
+        return (*_div(v["caja_equivalentes"], v["deuda_financiera_corriente"], "deuda_financiera_corriente"), {})
+    if nombre == "deuda_neta_ebitda":
+        deuda = v["deuda_financiera_corriente"] + v["deuda_financiera_no_corriente"]
+        ebitda = v["resultado_operativo"] + abs(v["depreciaciones_amortizaciones"])
+        if ebitda == 0:
+            return None, "division_por_cero", {}
+        if ebitda < 0:
+            return None, "ebitda_negativo", {}
+        return round((deuda - v["caja_equivalentes"]) / ebitda, 6), None, {"ebitda": ebitda, "deuda_total": deuda, "deuda_neta": deuda - v["caja_equivalentes"]}
+    if nombre == "fcf_deuda":
+        deuda = v["deuda_financiera_corriente"] + v["deuda_financiera_no_corriente"]
+        fcf = v["flujo_efectivo_operativo"] - abs(v["inversiones_capex"])
+        r, m = _div(fcf, deuda, "deuda_total")
+        return r, m, {"fcf": fcf, "deuda_total": deuda}
     # deuda_ebitda
     if v["deuda_financiera"] < 0:
         return None, "deuda_financiera_negativa", {}

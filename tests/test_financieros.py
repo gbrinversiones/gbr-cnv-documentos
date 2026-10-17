@@ -25,10 +25,19 @@ CITAS = {
     "pasivo_corriente": "Total del pasivo corriente 8.400.000 8.100.000",
     "intereses": "Resultado del periodo 1.250.000 (350.500) Intereses perdidos (1.100.000) (900.000)",
     "depreciaciones_amortizaciones": "Depreciaciones y amortizaciones del periodo 1.600.000 1.500.000",
+    "caja_equivalentes": "Efectivo y equivalentes de efectivo al cierre del periodo 1.234.567 987.654",
+    "flujo_efectivo_operativo": "Flujo neto de efectivo generado por las actividades operativas 4.100.000 3.700.000",
+    "inversiones_capex": "Adquisicion de propiedades, planta y equipo (2.300.000) (1.900.000)",
+    "deuda_financiera_corriente": "Prestamos y obligaciones negociables corrientes 5.200.800 4.800.400",
+    "deuda_financiera_no_corriente": "Prestamos y obligaciones negociables no corrientes 9.000.000 8.300.000",
+    "resultado_por_accion": "Resultado por accion basico 1,25 (0,35)",
+    "dividendos_pagados": "Dividendos pagados (500.000) (400.000)",
 }
 VALORES = {"ventas": 18400250, "resultado_operativo": 3300250, "resultado_neto": 1250000, "activo_total": 35000000,
            "pasivo_total": 21000000, "patrimonio_neto": 14000000, "deuda_financiera": 14200800, "efectivo": 1234567,
-           "activo_corriente": 9876543, "pasivo_corriente": 8400000, "intereses": -1100000, "depreciaciones_amortizaciones": 1600000}
+           "activo_corriente": 9876543, "pasivo_corriente": 8400000, "intereses": -1100000, "depreciaciones_amortizaciones": 1600000,
+           "caja_equivalentes": 1234567, "flujo_efectivo_operativo": 4100000, "inversiones_capex": -2300000, "deuda_financiera_corriente": 5200800,
+           "deuda_financiera_no_corriente": 9000000, "resultado_por_accion": 1.25, "dividendos_pagados": -500000}
 
 
 def respuesta(cifras=None, **extra):
@@ -154,7 +163,7 @@ def test_cifra_repetida_conserva_la_primera():
 
 def test_recorte_elige_paginas_relevantes_y_respeta_el_tope():
     recorte, paginas = fin.armar_recorte(BALANCE)
-    assert paginas == [1, 3, 4, 5]  # portada + balance + resultados + nota de prestamos; sin las notas de relleno
+    assert paginas == [1, 3, 4, 5, 6]  # portada + balance + resultados + nota de prestamos + flujo de efectivo; sin las notas de relleno
     assert "Hechos posteriores" not in recorte
     chico, _ = fin.armar_recorte(BALANCE, max_caracteres=2500)
     assert len(chico) <= 2500 + 200
@@ -424,3 +433,53 @@ def test_un_ultimo_digito_distinto_en_un_numero_grande_no_se_acepta():
     assert fin.numero_respaldado(8400001, "Total 8.400.000 8.100.000") is False
     assert fin.numero_respaldado(1234567.89, "Total 1.234.567,89") is True            # el decimal sigue andando
     assert fin.numero_respaldado(1234567.88, "Total 1.234.567,89") is False
+
+
+# --- Fase 16: flujo de efectivo, deuda corriente / no corriente, resultado por accion y dividendos ---------------
+
+NUEVOS = ("caja_equivalentes", "flujo_efectivo_operativo", "inversiones_capex", "deuda_financiera_corriente", "deuda_financiera_no_corriente", "resultado_por_accion", "dividendos_pagados")
+
+
+def test_los_siete_campos_de_la_fase_16_se_verifican_con_cita_y_numero():
+    cifras = [{"campo": c, "valor": VALORES[c], "cita": CITAS[c]} for c in NUEVOS]
+    ok, desc = fin.verificar_cifras(BALANCE, cifras, "miles de pesos")
+    assert set(ok) == set(NUEVOS) and desc == []
+    assert ok["inversiones_capex"]["valor"] == -2300000 and ok["inversiones_capex"]["valor_abs"] == -2300000 * 1000 and ok["flujo_efectivo_operativo"]["pagina"] == 6
+
+
+def test_el_resultado_por_accion_no_se_multiplica_por_la_escala():
+    ok, _ = fin.verificar_cifras(BALANCE, [{"campo": "resultado_por_accion", "valor": 1.25, "cita": CITAS["resultado_por_accion"]}], "millones de pesos")
+    assert ok["resultado_por_accion"]["valor"] == 1.25 and ok["resultado_por_accion"]["valor_abs"] == 1.25
+
+
+@pytest.mark.parametrize("campo,valor,cita,motivo", [
+    ("inversiones_capex", -2300000, "Adquisicion de propiedades, planta y equipo (9.999.999) (1.900.000)", "cita_no_esta_en_documento"),   # cita inventada
+    ("inversiones_capex", -2400000, CITAS["inversiones_capex"], "numero_no_esta_en_cita"),                                                  # numero que la cita no tiene
+    ("dividendos_pagados", 500000, CITAS["dividendos_pagados"], "numero_no_esta_en_cita"),                                                  # el signo tambien se verifica: (500.000) es negativo
+    ("resultado_por_accion", 1.26, CITAS["resultado_por_accion"], "numero_no_esta_en_cita"),
+    ("flujo_efectivo_operativo", 41000, CITAS["flujo_efectivo_operativo"], "numero_no_esta_en_cita"),                                       # otra escala: no vale
+])
+def test_los_campos_nuevos_descartan_lo_que_no_se_puede_respaldar(campo, valor, cita, motivo):
+    ok, desc = fin.verificar_cifras(BALANCE, [{"campo": campo, "valor": valor, "cita": cita}], "miles de pesos")
+    if motivo is None:
+        assert campo in ok
+    else:
+        assert ok == {} and desc == [{"campo": campo, "motivo": motivo}]
+
+
+def test_documentos_de_version_4_no_se_vuelven_a_pagar_salvo_con_completar(tmp_path):
+    a = alm.AlmacenLocal(str(tmp_path))
+    emp = {"empresa": "E", "cuit": "30111111112"}
+    alm.guardar_indice_empresa(a, emp["cuit"], [{"id": "7", "t": "estados_contables", "f": "2026-08-10", "texto_ok": True, "d": "x"}])
+    alm.guardar_texto(a, emp["cuit"], "7", BALANCE)
+    fin.guardar_financieros(a, emp["cuit"], {"periodos": [], "procesados": {"7": {"v": "4", "estado": "ok"}}})
+    assert fin.VERSION_EXTRACTOR == "5" and fin.candidatos(a, [emp]) == []
+    assert [m["id"] for _, m in fin.candidatos(a, [emp], completar=True)] == ["7"]
+    c = ClienteFalso(respuesta())
+    assert fin.ejecutar(a, [emp], c, max_docs=5, completar=True)["ok"] == 1
+    p = fin.leer_financieros(a, emp["cuit"])["periodos"][0]["cifras"]
+    assert set(NUEVOS) <= set(p) and fin.candidatos(a, [emp], completar=True) == []
+
+
+def test_el_pedido_al_modelo_describe_los_campos_nuevos():
+    assert all(c in fin.INSTRUCCIONES for c in NUEVOS) and set(fin.ESQUEMA["properties"]["cifras"]["items"]["properties"]["campo"]["enum"]) == set(fin.CAMPOS)

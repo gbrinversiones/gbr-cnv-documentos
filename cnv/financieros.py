@@ -16,8 +16,9 @@ import unicodedata
 
 from . import almacen as alm
 
-VERSION_EXTRACTOR = "4"  # 4: agrega activo/pasivo corriente, intereses y depreciaciones (para los ratios)
-VERSIONES_COMPATIBLES = ("3",)  # sus resultados siguen valiendo; solo se re-extraen a pedido (--completar-campos)
+VERSION_EXTRACTOR = "5"  # 5: agrega flujo de efectivo operativo, capex, caja, deuda corriente / no corriente, resultado por accion y dividendos
+# 4: activo/pasivo corriente, intereses y depreciaciones (para los ratios)
+VERSIONES_COMPATIBLES = ("3", "4")  # sus resultados siguen valiendo; solo se re-extraen a pedido (--completar-campos)
 MODELO = "claude-haiku-5-5"
 MAX_CARACTERES = 40_000
 CARACTERES_PORTADA = 3_000
@@ -27,7 +28,10 @@ MAX_INTENTOS = 3
 
 CAMPOS = ("ventas", "resultado_operativo", "resultado_neto", "activo_total", "pasivo_total",
           "patrimonio_neto", "deuda_financiera", "efectivo",
-          "activo_corriente", "pasivo_corriente", "intereses", "depreciaciones_amortizaciones")
+          "activo_corriente", "pasivo_corriente", "intereses", "depreciaciones_amortizaciones",
+          "caja_equivalentes", "flujo_efectivo_operativo", "inversiones_capex", "deuda_financiera_corriente", "deuda_financiera_no_corriente",
+          "resultado_por_accion", "dividendos_pagados")
+SIN_ESCALA = ("resultado_por_accion",)  # moneda por accion: la unidad del estado (miles, millones) no le aplica
 TIPOS_PERIODO = ("anual", "trimestral", "semestral")
 
 _RE_PAGINA = re.compile(r"\[pagina (\d+)\]")
@@ -47,7 +51,8 @@ PALABRAS_CLAVE = {
     "operating profit": 5, "operating income": 5, "revenues": 3, "net sales": 4, "cash and cash equivalents": 4,
     "borrowings": 4, "financial debt": 4, "loans": 2,
     "activo corriente": 4, "pasivo corriente": 4, "intereses perdidos": 4, "gastos por intereses": 4, "depreciaciones": 3, "amortizaciones": 2,
-    "flujo de efectivo": 5, "flujos de efectivo": 5, "current assets": 4, "current liabilities": 4, "interest expense": 4, "depreciation and amortization": 4,
+    "flujo de efectivo": 5, "flujos de efectivo": 5, "dividendos pagados": 3, "adquisicion de propiedades": 3, "actividades operativas": 3,
+    "ganancia por accion": 3, "resultado por accion": 3, "earnings per share": 3, "dividends paid": 3, "operating activities": 3, "property, plant and equipment": 2, "current assets": 4, "current liabilities": 4, "interest expense": 4, "depreciation and amortization": 4,
 }
 
 ESQUEMA = {
@@ -88,7 +93,13 @@ Devuelve:
   ventas (ingresos por ventas u ordinarios), resultado_operativo, resultado_neto (resultado del periodo), activo_total, pasivo_total,
   patrimonio_neto, deuda_financiera (total de prestamos y otros pasivos financieros, corriente mas no corriente, solo si figura como total o nota), efectivo (efectivo y equivalentes),
   activo_corriente (total del activo corriente), pasivo_corriente (total del pasivo corriente), intereses (intereses perdidos / gastos por intereses del periodo: solo si hay una linea explicita de intereses, no el resultado financiero neto),
-  depreciaciones_amortizaciones (total de depreciaciones y amortizaciones del periodo, del estado de flujo de efectivo o de la nota correspondiente; no las del ejercicio comparativo).
+  depreciaciones_amortizaciones (total de depreciaciones y amortizaciones del periodo, del estado de flujo de efectivo o de la nota correspondiente; no las del ejercicio comparativo),
+  caja_equivalentes (efectivo y equivalentes de efectivo al cierre del periodo, tal como lo muestra el estado de flujo de efectivo; si ahi no figura, el del balance),
+  flujo_efectivo_operativo (flujo neto de efectivo generado por o utilizado en las actividades operativas del periodo; negativo si es utilizado),
+  inversiones_capex (pagos por adquisicion de propiedades, planta y equipo del estado de flujo de efectivo: solo esa linea, no el total de inversion; tal como esta impreso, con su signo),
+  deuda_financiera_corriente (total de prestamos / pasivos financieros CORRIENTES, solo si figura como linea o total), deuda_financiera_no_corriente (idem NO corrientes; no sumes ni restes para obtenerlas),
+  resultado_por_accion (resultado por accion basico del periodo, tal cual impreso, con sus decimales; NO esta en miles ni millones),
+  dividendos_pagados (dividendos pagados en el periodo segun el estado de flujo de efectivo, tal como esta impreso, con su signo).
 - valor: el numero tal como esta impreso, SIN cambiar la escala (si el documento esta en miles, el valor va en miles). Negativo si esta entre parentesis o con signo menos.
 - cita: entre 3 y 40 palabras COPIADAS LITERALMENTE del documento: la fila de la tabla completa, con su rotulo y el numero tal cual aparece (por ejemplo "Total del activo 3.456.789"). Si el rotulo y el numero estan en lineas distintas, copia ambas lineas seguidas.
 - El documento puede estar en espanol o en ingles (por ejemplo "Statement of financial position", "Total assets", "Net income"): los campos y rotulos se mapean igual.
@@ -282,7 +293,7 @@ def verificar_cifras(texto: str, cifras: list, unidad: str = "") -> tuple:
         if not numero_respaldado(float(valor), cita):
             descartadas.append({"campo": campo, "motivo": "numero_no_esta_en_cita"})
             continue
-        ok[campo] = {"valor": valor, "valor_abs": valor * factor, "cita": " ".join(cita.split()), "pagina": pagina}
+        ok[campo] = {"valor": valor, "valor_abs": valor * (1 if campo in SIN_ESCALA else factor), "cita": " ".join(cita.split()), "pagina": pagina}
     return ok, descartadas
 
 
