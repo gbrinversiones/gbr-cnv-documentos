@@ -1,0 +1,212 @@
+"""Llamadas al modelo en paralelo (financieros, resumenes, clasificar, avisos-pago, condiciones, eventos) con las mismas garantias que el bucle secuencial.
+
+Reparto de tareas:
+  - un pool de hilos acotado hace SOLO el trabajo caro y sin efectos (leer el texto y llamar al modelo; las reglas de verificacion de citas no cambian);
+  - el hilo principal CONFIRMA los resultados (anota el estado, guarda en el almacen, suma los totales y escribe el log) de a uno, en el orden en que se
+    enviaron los documentos. Por eso hay una sola escritura al almacen a la vez (ESCRITURA lo hace explicito), se guarda tras cada documento como antes y la
+    salida es determinista (mismo orden que sin paralelismo);
+  - los topes (--max, --tiempo-max) dejan de ENVIAR trabajo nuevo y esperan a los que estan en vuelo: no se pierde ningun resultado ya pagado;
+  - un hilo que falla con un error inesperado no pierde a los demas: ese documento queda pendiente para la proxima corrida;
+  - ante 429 / 5xx / «overloaded» se reintenta con espera creciente respetando el header `retry-after`; si los limites de tasa se repiten, la concurrencia
+    baja sola (y vuelve a subir de a uno cuando la API se normaliza).
+Concurrencia: CNV_CONCURRENCIA (defecto 4, minimo 1, maximo 6). Con 1 todo corre en el hilo principal, sin pool, exactamente como el bucle secuencial anterior.
+"""
+import os
+import random
+import threading
+import time
+from collections import deque
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+
+DEFECTO, MAXIMO = 4, 6
+INTENTOS_API = 5                 # llamadas a la API por pedido (1 + 4 reintentos)
+ESPERA_MAXIMA = 120.0            # segundos: tope de lo que se espera por un retry-after
+ESCRITURA = threading.Lock()     # una sola escritura al almacen a la vez
+HTTP_REINTENTABLES = {408, 409, 429, 500, 502, 503, 504, 529}
+NOMBRES_REINTENTABLES = {"RateLimitError", "InternalServerError", "OverloadedError", "APIConnectionError", "APITimeoutError"}
+NOMBRES_LIMITE = {"RateLimitError", "OverloadedError"}
+
+
+def hilos() -> int:
+    """CNV_CONCURRENCIA acotado a [1, MAXIMO]; si no es un entero, el valor por defecto."""
+    try:
+        n = int(os.environ.get("CNV_CONCURRENCIA", DEFECTO))
+    except ValueError:
+        n = DEFECTO
+    return max(1, min(MAXIMO, n))
+
+
+# ---------------------------------------------------------------------------
+# Reintentos ante limites de tasa y errores del servidor
+# ---------------------------------------------------------------------------
+
+def _estado_http(error) -> int | None:
+    s = getattr(error, "status_code", None)
+    return s if isinstance(s, int) else None
+
+
+def es_reintentable(error: Exception) -> bool:
+    return (_estado_http(error) in HTTP_REINTENTABLES or type(error).__name__ in NOMBRES_REINTENTABLES or "overloaded" in str(error).lower())
+
+
+def es_limite_de_tasa(error: Exception) -> bool:
+    """429 / 529 / overloaded: la API pide ir mas despacio (a diferencia de un 500 o un corte de red)."""
+    return _estado_http(error) in (429, 529) or type(error).__name__ in NOMBRES_LIMITE or "overloaded" in str(error).lower()
+
+
+def espera_para(error: Exception, intento: int, azar=random.random) -> float:
+    """Segundos a esperar antes del reintento `intento` (0 = el primero): el header `retry-after` si la API lo mando (tope ESPERA_MAXIMA), si no 2^intento + azar."""
+    cabeceras = getattr(getattr(error, "response", None), "headers", None)
+    try:
+        valor = cabeceras.get("retry-after") if cabeceras is not None else None
+        if valor is not None:
+            return max(0.0, min(ESPERA_MAXIMA, float(valor)))
+    except (TypeError, ValueError, AttributeError):
+        pass
+    return min(60.0, 2.0 ** (intento + 1) + azar())
+
+
+class Limitador:
+    """Cuantos pedidos en vuelo se permiten. Baja a la mitad (minimo 1) cuando hay `umbral` limites de tasa dentro de `ventana` segundos; sube de a uno
+    despues de `exitos_para_subir` pedidos exitosos seguidos, hasta el maximo configurado."""
+
+    def __init__(self, maximo: int, reloj=time.monotonic, ventana: float = 60.0, umbral: int = 3, exitos_para_subir: int = 20):
+        self.maximo, self.actual = maximo, maximo
+        self.reloj, self.ventana, self.umbral, self.exitos_para_subir = reloj, ventana, umbral, exitos_para_subir
+        self.eventos, self.exitos, self.bajadas = deque(), 0, 0
+        self._cerrojo = threading.Lock()
+
+    def limite(self) -> None:
+        with self._cerrojo:
+            ahora = self.reloj()
+            self.eventos.append(ahora)
+            while self.eventos and ahora - self.eventos[0] > self.ventana:
+                self.eventos.popleft()
+            self.exitos = 0
+            if len(self.eventos) >= self.umbral and self.actual > 1:
+                self.actual = max(1, self.actual // 2)
+                self.bajadas += 1
+                self.eventos.clear()
+                print(f"  limite de tasa sostenido: la concurrencia baja a {self.actual}", flush=True)
+
+    def exito(self) -> None:
+        with self._cerrojo:
+            self.exitos += 1
+            if self.exitos >= self.exitos_para_subir and self.actual < self.maximo:
+                self.actual += 1
+                self.exitos = 0
+
+    def permitidos(self) -> int:
+        return self.actual
+
+
+_limitador: Limitador | None = None          # lo fija ejecutar_lote durante una corrida; fuera de una corrida no hay limitador
+
+
+def con_reintentos(fn, intentos: int = INTENTOS_API, dormir=None, limitador: Limitador | None = None, azar=random.random):
+    """Llama a `fn()`; ante un error reintentable espera (retry-after o espera creciente) y vuelve a llamar, hasta `intentos` veces. Lo demas se propaga ya."""
+    dormir = dormir or time.sleep
+    limitador = limitador or _limitador
+    for n in range(intentos):
+        try:
+            r = fn()
+        except Exception as error:
+            if not es_reintentable(error) or n == intentos - 1:
+                raise
+            if limitador is not None and es_limite_de_tasa(error):
+                limitador.limite()
+            dormir(espera_para(error, n, azar))
+            continue
+        if limitador is not None:
+            limitador.exito()
+        return r
+
+
+def crear_mensaje(cliente, **kw):
+    """`cliente.messages.create(**kw)` con reintentos. Es el unico punto por el que pasan las llamadas al modelo."""
+    return con_reintentos(lambda: cliente.messages.create(**kw))
+
+
+# ---------------------------------------------------------------------------
+# Ejecutor
+# ---------------------------------------------------------------------------
+
+class Res:
+    """Lo que devuelve el trabajo de un documento. `llamo`: si cuenta contra el tope --max (llamo al modelo o lo intento)."""
+    __slots__ = ("datos", "llamo")
+
+    def __init__(self, datos, llamo: bool = True):
+        self.datos, self.llamo = datos, llamo
+
+
+def ejecutar_lote(pend: list, trabajar, confirmar, max_llamadas: int, hasta_t: float | None = None, n_hilos: int | None = None,
+                  reloj=time.monotonic, al_fallar=None) -> dict:
+    """Procesa `pend` ([(empresa, meta)]) en el orden dado.
+      trabajar(e, m) -> Res | None   corre en un hilo; None = no hay nada que hacer con ese documento (no cuenta ni se confirma)
+      confirmar(e, m, res)           corre en el hilo principal, de a uno y EN EL ORDEN DE ENVIO
+      al_fallar(e, m, error)         (opcional) para un error inesperado del hilo; sin el, se imprime y el documento queda pendiente
+    Devuelve {"corte": None | "max" | "tiempo", "indice": posicion del primer documento NO enviado (o None), "llamadas": cuantos contaron}."""
+    global _limitador
+    n = n_hilos if n_hilos is not None else hilos()
+    llamadas = 0
+
+    def tope() -> bool:
+        return llamadas >= max_llamadas
+
+    def vencido() -> bool:
+        return bool(hasta_t and reloj() > hasta_t)
+
+    if n <= 1:                                                   # camino secuencial: sin pool, identico al bucle de siempre
+        for i, (e, m) in enumerate(pend):
+            if tope():
+                return {"corte": "max", "indice": i, "llamadas": llamadas}
+            if vencido():
+                return {"corte": "tiempo", "indice": i, "llamadas": llamadas}
+            res = trabajar(e, m)
+            if res is None:
+                continue
+            confirmar(e, m, res)
+            llamadas += bool(res.llamo)
+        return {"corte": None, "indice": None, "llamadas": llamadas}
+
+    limitador = Limitador(n)
+    _limitador = limitador
+    corte, indice = None, None
+    try:
+        with ThreadPoolExecutor(max_workers=n) as pool:
+            orden = deque()                    # (futuro, e, m) en el orden de envio, aun sin confirmar
+            siguiente = 0
+            while True:
+                # 1) enviar mientras haya cupo, tiempo, documentos y margen bajo el tope (los que estan en vuelo cuentan como posibles llamadas)
+                while corte is None and siguiente < len(pend) and len(orden) < min(n, limitador.permitidos()):
+                    if vencido():
+                        corte, indice = "tiempo", siguiente
+                        break
+                    if llamadas + len(orden) >= max_llamadas:
+                        if not orden:
+                            corte, indice = "max", siguiente
+                        break                  # hay que esperar a ver cuantos de los que vuelan realmente cuentan
+                    e, m = pend[siguiente]
+                    orden.append((pool.submit(trabajar, e, m), e, m))
+                    siguiente += 1
+                if not orden:                          # nada en vuelo y nada mas para enviar (se acabaron los documentos o hubo corte)
+                    break
+                # 2) esperar al primero en orden y confirmarlo (los demas siguen trabajando); los ya terminados siguen despues
+                futuro, e, m = orden[0]
+                wait([futuro], return_when=FIRST_COMPLETED)
+                orden.popleft()
+                try:
+                    res = futuro.result()
+                except Exception as error:     # un fallo inesperado de UN hilo no pierde a los demas
+                    if al_fallar:
+                        al_fallar(e, m, error)
+                    else:
+                        print(f"  {e['empresa']} #{m['id']}: error inesperado {type(error).__name__}: {error}", flush=True)
+                    continue
+                if res is None:
+                    continue
+                confirmar(e, m, res)
+                llamadas += bool(res.llamo)
+    finally:
+        _limitador = None
+    return {"corte": corte, "indice": indice, "llamadas": llamadas, "bajadas_de_concurrencia": limitador.bajadas}
