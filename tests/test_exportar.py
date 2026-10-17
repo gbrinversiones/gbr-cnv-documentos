@@ -120,3 +120,11 @@ def test_comando(base, monkeypatch, capsys):
     monkeypatch.setattr(cli, "cargar_universo", lambda: UNIVERSO)
     assert cli.main(["exportar"]) == 0
     assert "financieros.csv" in capsys.readouterr().out
+
+
+def test_un_total_derivado_no_se_exporta_como_si_fuera_una_cifra_del_documento(base):
+    fin.guardar_financieros(base, A["cuit"], {"periodos": [periodo("9", "2025-12-31", deuda_financiera_corriente=4000, deuda_financiera_no_corriente=8000, resultado_operativo=3000, depreciaciones_amortizaciones=1000)], "procesados": {}})
+    exp.construir(base, UNIVERSO)
+    f = {x["doc"]: x for x in leer_csv(base, "financieros.csv")}["9"]
+    assert f["deuda_financiera"] == "" and f["deuda_financiera_corriente"] == "4000" and f["deuda_financiera_no_corriente"] == "8000"
+    assert f["deuda_ebitda"] == "3.0"                  # el ratio si usa la suma, y lo dice en derivados

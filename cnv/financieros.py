@@ -32,6 +32,19 @@ CAMPOS = ("ventas", "resultado_operativo", "resultado_neto", "activo_total", "pa
           "caja_equivalentes", "flujo_efectivo_operativo", "inversiones_capex", "deuda_financiera_corriente", "deuda_financiera_no_corriente",
           "resultado_por_accion", "dividendos_pagados")
 SIN_ESCALA = ("resultado_por_accion",)  # moneda por accion: la unidad del estado (miles, millones) no le aplica
+
+_PESOS = ("peso", "pesos", "pesos argentinos", "peso argentino", "pesos argentinos (ars)", "ars", "$", "moneda nacional", "pesos (ars)", "$ (pesos)")
+_DOLARES = ("dolar", "dolares", "dolares estadounidenses", "dolar estadounidense", "dolares americanos", "dolar americano", "usd", "us$", "u$s", "u$d", "dolares (usd)", "us dollar", "us dollars", "dollars")
+
+
+def moneda_canonica(moneda) -> str:
+    """"pesos" / "dolares" para las escrituras habituales ("Pesos Argentinos", "ARS", "US$"...); cualquier otra se deja como esta (sin acentos, en minuscula).
+    Dos periodos del mismo emisor que escriben distinto la misma moneda no son un cambio de moneda."""
+    t = unicodedata.normalize("NFKD", str(moneda or "")).encode("ascii", "ignore").decode().lower()
+    t = " ".join(t.replace(".", "").split())
+    return "pesos" if t in _PESOS else "dolares" if t in _DOLARES else t
+
+
 TIPOS_PERIODO = ("anual", "trimestral", "semestral")
 
 _RE_PAGINA = re.compile(r"\[pagina (\d+)\]")
@@ -92,12 +105,12 @@ Devuelve:
 - cifras: solo las que figuren EXPLICITAMENTE en el texto, de la columna del periodo actual (no la comparativa):
   ventas (ingresos por ventas u ordinarios), resultado_operativo, resultado_neto (resultado del periodo), activo_total, pasivo_total,
   patrimonio_neto, deuda_financiera (total de prestamos y otros pasivos financieros, corriente mas no corriente, solo si figura como total o nota), efectivo (efectivo y equivalentes),
-  activo_corriente (total del activo corriente), pasivo_corriente (total del pasivo corriente), intereses (intereses perdidos / gastos por intereses del periodo: solo si hay una linea explicita de intereses, no el resultado financiero neto),
+  activo_corriente (total del activo corriente), pasivo_corriente (total del pasivo corriente), intereses (intereses perdidos / gastos por intereses / costos financieros por intereses del periodo, tambien si figuran en la nota de resultados financieros; solo una linea explicita de INTERESES, nunca el resultado financiero neto ni las diferencias de cambio),
   depreciaciones_amortizaciones (total de depreciaciones y amortizaciones del periodo, del estado de flujo de efectivo o de la nota correspondiente; no las del ejercicio comparativo),
   caja_equivalentes (efectivo y equivalentes de efectivo al cierre del periodo, tal como lo muestra el estado de flujo de efectivo; si ahi no figura, el del balance),
   flujo_efectivo_operativo (flujo neto de efectivo generado por o utilizado en las actividades operativas del periodo; negativo si es utilizado),
   inversiones_capex (pagos por adquisicion de propiedades, planta y equipo del estado de flujo de efectivo: solo esa linea, no el total de inversion; tal como esta impreso, con su signo),
-  deuda_financiera_corriente (total de prestamos / pasivos financieros CORRIENTES, solo si figura como linea o total), deuda_financiera_no_corriente (idem NO corrientes; no sumes ni restes para obtenerlas),
+  deuda_financiera_corriente (total de prestamos / pasivos financieros CORRIENTES, solo si figura como linea o total; si el cuerpo del balance no lo muestra y la nota de prestamos / deuda financiera trae el total corriente, tomalo de la nota), deuda_financiera_no_corriente (idem NO corrientes; no sumes ni restes para obtenerlas),
   resultado_por_accion (resultado por accion basico del periodo, tal cual impreso, con sus decimales; NO esta en miles ni millones),
   dividendos_pagados (dividendos pagados en el periodo segun el estado de flujo de efectivo, tal como esta impreso, con su signo).
 - valor: el numero tal como esta impreso, SIN cambiar la escala (si el documento esta en miles, el valor va en miles). Negativo si esta entre parentesis o con signo menos.
@@ -449,7 +462,7 @@ def construir_indice_financieros(almacen, empresas: list) -> int:
     for e in empresas:
         vistos = {}
         for p in leer_financieros(almacen, e["cuit"])["periodos"]:
-            clave = (p["periodo"], p["tipo"], p["acumulado"], p.get("balance", "desconocido"))
+            clave = (p["periodo"], p["tipo"], p["acumulado"], p.get("balance", "desconocido"), moneda_canonica(p.get("moneda")))   # consolidado en USD y en ARS del mismo cierre son dos filas
             if clave not in vistos or int(p["doc"]) > int(vistos[clave]["doc"]):
                 vistos[clave] = p
         for p in vistos.values():

@@ -278,3 +278,106 @@ def test_ratios_16_no_mezclan_unidades_ni_cifras_sospechosas():
     a = {c: rat.contexto(p, c) for c in rat.ENTRADAS["cobertura_deuda_cp"]}
     a["caja_equivalentes"] = {**a["caja_equivalentes"], "escala": 1}
     assert rat.calcular_ratio("cobertura_deuda_cp", a)[1] == "unidades_distintas"
+
+
+# --- Caso YPF: deuda derivada, ficha de una fila por cierre ---------------------------------------------------------
+
+SIN_TOTAL = {k: v for k, v in COMPLETO.items() if k != "deuda_financiera"}      # como el extractor v5: corriente + no corriente, sin el total
+
+
+def test_deuda_financiera_se_deriva_de_los_dos_componentes_y_queda_trazada():
+    f = rat.ratios_de_periodo(periodo(**SIN_TOTAL))
+    assert f["ratios"]["deuda_ebitda"] == 3.0 and f["derivados"]["deuda_financiera"] == 12_000       # (4.000 + 8.000) / (3.000 + 1.000)
+    assert f["insumos"]["deuda_financiera"] == {"valor": 12_000, "pagina": None, "derivado": "deuda_financiera_corriente + deuda_financiera_no_corriente"}
+    assert "deuda_ebitda" not in f["motivos"]
+
+
+def test_no_se_deriva_si_el_total_figura_si_falta_un_componente_o_alguno_es_sospechoso():
+    con_total = rat.ratios_de_periodo(periodo(**{**SIN_TOTAL, "deuda_financiera": 11_000}))
+    assert con_total["insumos"]["deuda_financiera"] == {"valor": 11_000, "pagina": 3} and "deuda_financiera" not in con_total["derivados"]      # manda el total del documento
+    sin_nc = rat.ratios_de_periodo(periodo(**{k: v for k, v in SIN_TOTAL.items() if k != "deuda_financiera_no_corriente"}))
+    assert sin_nc["ratios"]["deuda_ebitda"] is None and sin_nc["motivos"]["deuda_ebitda"] == "falta_cifra:deuda_financiera"
+    sosp = rat.ratios_de_periodo(periodo(**SIN_TOTAL), {"deuda_financiera_corriente"})
+    assert sosp["ratios"]["deuda_ebitda"] is None and "deuda_financiera" not in sosp["derivados"]
+
+
+def test_derivar_exige_misma_unidad():
+    base = {"valor": 1, "pagina": 1, "periodo": "2025-12-31", "tipo": "anual", "acumulado": True, "moneda": "pesos", "escala": 1000, "doc": "10", "balance": "consolidado"}
+    assert rat.derivar_deuda_financiera({"deuda_financiera_corriente": base, "deuda_financiera_no_corriente": {**base, "escala": 1}}) is None
+    assert rat.derivar_deuda_financiera({"deuda_financiera_corriente": base, "deuda_financiera_no_corriente": {**base, "moneda": "dolares"}}) is None
+    assert rat.derivar_deuda_financiera({"deuda_financiera_corriente": base}) is None
+    assert rat.derivar_deuda_financiera({"deuda_financiera_corriente": base, "deuda_financiera_no_corriente": base})["valor"] == 2
+
+
+def test_sin_linea_de_intereses_es_un_motivo_propio():
+    sin = {k: v for k, v in COMPLETO.items() if k != "intereses"}
+    f = rat.ratios_de_periodo(periodo(**sin))
+    assert f["ratios"]["cobertura_intereses"] is None and f["motivos"]["cobertura_intereses"] == "sin_linea_intereses"
+    f2 = rat.ratios_de_periodo(periodo(**{k: v for k, v in sin.items() if k != "resultado_operativo"}))
+    assert f2["motivos"]["cobertura_intereses"] == "falta_cifra:resultado_operativo,intereses"      # si falta mas que los intereses, es una cifra que falta
+
+
+def fila(doc, balance="consolidado", moneda="dolares", cierre="2026-06-30", tipo="semestral", **cifras):
+    return rat.ratios_de_periodo(periodo(doc=doc, periodo_=cierre, tipo=tipo, balance=balance, moneda=moneda, **cifras))
+
+
+YPF_INDIVIDUAL_ARS = dict(pasivo_total=21_000, patrimonio_neto=14_000)                                                    # solo pasivo/patrimonio: 1 ratio
+YPF_CONSOLIDADO = dict(activo_corriente=9_000, pasivo_corriente=6_000, pasivo_total=21_000, patrimonio_neto=14_000, resultado_neto=1_400, ventas=20_000,
+                       resultado_operativo=3_000, depreciaciones_amortizaciones=1_000, intereses=-1_500)                  # 5 ratios (liquidez, endeudamiento, margen, cobertura + ...)
+
+
+def test_la_ficha_prefiere_el_consolidado_y_deja_el_individual_como_alternativa():
+    filas = [fila("1", balance="individual", moneda="pesos", **YPF_INDIVIDUAL_ARS), fila("2", moneda="pesos", **YPF_CONSOLIDADO), fila("3", moneda="dolares", **YPF_CONSOLIDADO)]
+    ficha = rat.seleccionar_ficha(filas)
+    assert len(ficha) == 1
+    f = ficha[0]
+    assert (f["doc"], f["balance"], f["moneda"]) == ("3", "consolidado", "dolares")           # consolidado; empate de ratios -> dolares
+    assert [(a["doc"], a["balance"], a["moneda"]) for a in f["alternativas"]] == [("2", "consolidado", "pesos"), ("1", "individual", "pesos")]
+    assert f["alternativas"][1]["ratios_calculados"] == 1 and f["ratios_calculados"] == 4
+
+
+def test_entre_consolidados_gana_el_que_tiene_mas_ratios_aunque_no_sea_dolares():
+    filas = [fila("2", moneda="pesos", **YPF_CONSOLIDADO), fila("3", moneda="dolares", **YPF_INDIVIDUAL_ARS)]
+    assert rat.seleccionar_ficha(filas)[0]["doc"] == "2"
+
+
+def test_el_consolidado_gana_al_individual_aunque_el_individual_tenga_mas_ratios():
+    filas = [fila("1", balance="individual", moneda="pesos", **YPF_CONSOLIDADO), fila("2", balance="consolidado", moneda="pesos", **YPF_INDIVIDUAL_ARS)]
+    f = rat.seleccionar_ficha(filas)[0]
+    assert f["doc"] == "2" and f["alternativas"][0]["doc"] == "1" and f["balance"] == "consolidado"
+
+
+def test_la_ficha_tiene_una_fila_por_cierre_y_tipo_y_si_solo_hay_individual_lo_muestra():
+    filas = [fila("1", balance="individual", moneda="pesos", cierre="2026-03-31", tipo="trimestral", **YPF_CONSOLIDADO),
+             fila("2", moneda="dolares", **YPF_CONSOLIDADO), fila("3", moneda="dolares", cierre="2025-12-31", tipo="anual", **YPF_CONSOLIDADO),
+             fila("4", balance="desconocido", moneda="pesos", cierre="2025-12-31", tipo="anual", **YPF_CONSOLIDADO)]
+    ficha = rat.seleccionar_ficha(filas)
+    assert [(f["periodo"], f["tipo"], f["doc"], f["balance"]) for f in ficha] == [("2026-06-30", "semestral", "2", "consolidado"), ("2026-03-31", "trimestral", "1", "individual"), ("2025-12-31", "anual", "3", "consolidado")]
+    assert ficha[1]["alternativas"] == []
+
+
+def test_desempate_final_por_documento_mas_nuevo():
+    filas = [fila("5", moneda="pesos", **YPF_CONSOLIDADO), fila("9", moneda="pesos", balance="consolidado", **YPF_CONSOLIDADO)]
+    assert rat.seleccionar_ficha(filas)[0]["doc"] == "9"
+
+
+def test_periodos_vigentes_conserva_el_consolidado_en_cada_moneda_y_no_parte_por_la_grafia():
+    ps = [periodo(doc="1", moneda="dolares", **COMPLETO), periodo(doc="2", moneda="pesos", **COMPLETO), periodo(doc="3", moneda="Pesos Argentinos", **COMPLETO),
+          periodo(doc="4", moneda="US$", **COMPLETO)]
+    assert sorted(p["doc"] for p in rat.periodos_vigentes(ps)) == ["3", "4"]          # una por moneda: 3 reemplaza a 2 (misma moneda, mas nuevo), 4 a 1
+
+
+def test_ratios_json_trae_ficha_y_periodos_con_balance_y_moneda_explicitos(tmp_path):
+    a = alm.AlmacenLocal(str(tmp_path))
+    guardar(a, [periodo(doc="1", balance="individual", moneda="pesos", **COMPLETO), periodo(doc="2", balance="consolidado", moneda="dolares", **COMPLETO)])
+    stats = rat.construir(a, [EMP])
+    e = json.loads(gzip.decompress(a.leer("cnv/indice/ratios.json.gz")))["emisores"][EMP["cuit"]]
+    assert len(e["periodos"]) == 2 and stats["ficha"] == 1 and len(e["ficha"]) == 1
+    assert (e["ficha"][0]["balance"], e["ficha"][0]["moneda"], e["ficha"][0]["doc"]) == ("consolidado", "dolares", "2") and e["ficha"][0]["alternativas"][0]["balance"] == "individual"
+    assert all(f["balance"] and f["moneda"] for f in e["periodos"])
+
+
+def test_el_indice_de_financieros_conserva_las_dos_monedas_del_mismo_cierre(tmp_path):
+    a = alm.AlmacenLocal(str(tmp_path))
+    guardar(a, [periodo(doc="1", moneda="dolares", **COMPLETO), periodo(doc="2", moneda="pesos", **COMPLETO), periodo(doc="3", moneda="ARS", **COMPLETO)])
+    assert fin.construir_indice_financieros(a, [EMP]) == 2

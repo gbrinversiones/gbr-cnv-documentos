@@ -136,7 +136,7 @@ def filas_financieros(almacen, empresas: list) -> list:
             f = {"cuit": e["cuit"], "empresa": e["empresa"], "doc": p["doc"], "periodo": p.get("periodo"), "tipo": p.get("tipo"), "acumulado": p.get("acumulado"),
                  "balance": p.get("balance", "desconocido"), "moneda": p.get("moneda"), "unidad": p.get("unidad"), "escala": p.get("escala"),
                  "fecha_presentacion": p.get("fecha_presentacion"), "periodo_verificado": p.get("periodo_verificado"), "balance_coherente": p.get("balance_coherente")}
-            f.update({c: r["insumos"][c]["valor"] if c in r["insumos"] else None for c in CIFRAS})
+            f.update({c: r["insumos"][c]["valor"] if c in r["insumos"] and not r["insumos"][c].get("derivado") else None for c in CIFRAS})   # un total derivado no es una cifra del documento
             f["cifras_sospechosas"] = r.get("sospechosas")
             f.update(r["ratios"])
             f["ratios_sin_calcular"] = [f"{n}:{m}" for n, m in sorted(r["motivos"].items())]
