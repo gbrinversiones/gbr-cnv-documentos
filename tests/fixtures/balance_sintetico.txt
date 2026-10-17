@@ -47,8 +47,15 @@ NOTA 12 - PRESTAMOS Y OBLIGACIONES NEGOCIABLES (endeudamiento)
 Obligaciones negociables clase 5 7.000.000 6.500.000
 Prestamos bancarios 7.200.800 6.600.400
 Total de prestamos y obligaciones negociables 14.200.800 13.100.400
+Prestamos y obligaciones negociables corrientes 5.200.800 4.800.400
+Prestamos y obligaciones negociables no corrientes 9.000.000 8.300.000
 Depreciaciones y amortizaciones del periodo 1.600.000 1.500.000
 
 [pagina 6]
-NOTA 20 - Hechos posteriores
-Texto de relleno de una nota sin cifras clave sobre politicas contables y partes relacionadas. Texto de relleno de una nota sin cifras clave sobre politicas contables y partes relacionadas. Texto de relleno de una nota sin cifras clave sobre politicas contables y partes relacionadas. Texto de relleno de una nota sin cifras clave sobre politicas contables y partes relacionadas. Texto de relleno de una nota sin cifras clave sobre politicas contables y partes relacionadas. Texto de relleno de una nota sin cifras clave sobre politicas contables y partes relacionadas. Texto de relleno de una nota sin cifras clave sobre politicas contables y partes relacionadas. Texto de relleno de una nota sin cifras clave sobre politicas contables y partes relacionadas. Texto de relleno de una nota sin cifras clave sobre politicas contables y partes relacionadas. Texto de relleno de una nota sin cifras clave sobre politicas contables y partes relacionadas. Texto de relleno de una nota sin cifras clave sobre politicas contables y partes relacionadas. Texto de relleno de una nota sin cifras clave sobre politicas contables y partes relacionadas. 
+ESTADO DE FLUJO DE EFECTIVO CONDENSADO INTERMEDIO
+Por el periodo de seis meses finalizado el 30 de junio de 2026 (expresado en miles de pesos)
+Flujo neto de efectivo generado por las actividades operativas 4.100.000 3.700.000
+Adquisicion de propiedades, planta y equipo (2.300.000) (1.900.000)
+Dividendos pagados (500.000) (400.000)
+Efectivo y equivalentes de efectivo al cierre del periodo 1.234.567 987.654
+Resultado por accion basico 1,25 (0,35)
