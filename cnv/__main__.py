@@ -12,6 +12,7 @@
   python -m cnv ocr [--max-docs N] [--tiempo-max 7200]   # OCR de los escaneados; requiere tesseract (ver cnv/ocr.py)
   python -m cnv novedades [--dias 7] [--hoy AAAA-MM-DD]   # documentos nuevos y lo presentado en los ultimos dias (sin modelo)
   python -m cnv perfiles [--ons data/ons.csv]   # perfil de emisor en texto plantilla con datos verificados (sin modelo)
+  python -m cnv eventos [--max 150] [--solo CUIT]   # eventos tipados de hechos relevantes (dividendos, emision ON, recompra, asamblea, M&A)
   python -m cnv calidad [--n 30] [--salida ARCHIVO]   # muestra determinista de periodos con revision cruzada (sin modelo)
   python -m cnv exportar   # CSV para analistas en cnv/export/ + diccionario.md (sin modelo)
   python -m cnv cobertura [--ons data/ons.csv] [--hoy AAAA-MM-DD]   # cruce emisores/ONs con documentos y datos (sin modelo)
@@ -41,6 +42,7 @@ from . import emisores_byma as eby
 from . import exportar as exp
 from . import condiciones as cond
 from . import escaneados as esc
+from . import eventos as eve
 from . import novedades as nov
 from . import ocr
 from . import perfiles as per
@@ -115,6 +117,11 @@ def main(argv=None) -> int:
     pf = sub.add_parser("perfiles")
     pf.add_argument("--ons", default="data/ons.csv", help="CSV de ONs con el CUIT de cada emisor")
     pf.add_argument("--hoy", default=None, help="AAAA-MM-DD (para reproducir un informe)")
+    ev = sub.add_parser("eventos")
+    ev.add_argument("--max", type=int, default=150, help="maximo de hechos enviados al modelo por corrida (controla el costo)")
+    ev.add_argument("--solo", default=None, help="CUIT: procesa solo esa empresa")
+    ev.add_argument("--tiempo-max", type=int, default=900)
+    ev.add_argument("--solo-indice", action="store_true", help="no llama al modelo: solo reconstruye cnv/indice/eventos.json.gz")
     sub.add_parser("exportar")
     ca = sub.add_parser("calidad")
     ca.add_argument("--n", type=int, default=cal.N_DEFECTO, help="tamano de la muestra (determinista)")
@@ -223,6 +230,18 @@ def main(argv=None) -> int:
 
     if a.cmd == "perfiles":
         print("TOTAL", json.dumps(per.construir(almacen, universo, cob.leer_ons(a.ons), dt.date.fromisoformat(a.hoy) if a.hoy else None), ensure_ascii=False))
+        return 0
+
+    if a.cmd == "eventos":
+        if not a.solo_indice:
+            if not os.environ.get("ANTHROPIC_API_KEY"):
+                print("falta ANTHROPIC_API_KEY")
+                return 2
+            import anthropic
+
+            empresas = [e for e in universo if not a.solo or e["cuit"] == a.solo.replace("-", "")]
+            print("TOTAL", eve.ejecutar(almacen, empresas, anthropic.Anthropic(timeout=120.0), a.max, time.monotonic() + a.tiempo_max))
+        print("indice eventos:", eve.construir_indice(almacen, universo), "eventos")
         return 0
 
     if a.cmd == "calidad":
