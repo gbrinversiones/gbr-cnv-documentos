@@ -13,6 +13,7 @@
   python -m cnv novedades [--dias 7] [--hoy AAAA-MM-DD]   # documentos nuevos y lo presentado en los ultimos dias (sin modelo)
   python -m cnv perfiles [--ons data/ons.csv]   # perfil de emisor en texto plantilla con datos verificados (sin modelo)
   python -m cnv eventos [--max 150] [--solo CUIT]   # eventos tipados de hechos relevantes (dividendos, emision ON, recompra, asamblea, M&A)
+  python -m cnv tiempos   # tabla de tiempo por comando del job (lee el archivo de CNV_TIEMPOS)
   python -m cnv calidad [--n 30] [--salida ARCHIVO]   # muestra determinista de periodos con revision cruzada (sin modelo)
   python -m cnv exportar   # CSV para analistas en cnv/export/ + diccionario.md (sin modelo)
   python -m cnv cobertura [--ons data/ons.csv] [--hoy AAAA-MM-DD]   # cruce emisores/ONs con documentos y datos (sin modelo)
@@ -48,6 +49,7 @@ from . import ocr
 from . import perfiles as per
 from . import ratios as rat
 from . import salud
+from . import tiempos as tmp
 from . import universo as uni
 from . import financieros as fin
 from . import resumenes as res
@@ -56,7 +58,7 @@ from .sincronizar import (TIPOS_DEFECTO, TIPOS_TEXTO, cargar_universo, construir
                           sincronizar_empresa)
 
 
-def main(argv=None) -> int:
+def _ejecutar(argv=None) -> int:
     p = argparse.ArgumentParser(prog="cnv")
     sub = p.add_subparsers(dest="cmd", required=True)
     s = sub.add_parser("sync")
@@ -122,12 +124,14 @@ def main(argv=None) -> int:
     ev.add_argument("--solo", default=None, help="CUIT: procesa solo esa empresa")
     ev.add_argument("--tiempo-max", type=int, default=900)
     ev.add_argument("--solo-indice", action="store_true", help="no llama al modelo: solo reconstruye cnv/indice/eventos.json.gz")
+    sub.add_parser("tiempos")
     sub.add_parser("exportar")
     ca = sub.add_parser("calidad")
     ca.add_argument("--n", type=int, default=cal.N_DEFECTO, help="tamano de la muestra (determinista)")
     ca.add_argument("--salida", default=None, help="archivo Markdown (si no, se imprime)")
     bq = sub.add_parser("busqueda")
     bq.add_argument("--tiempo-max", type=int, default=1500, help="segundos; si no alcanza NO se publica nada (el indice anterior sigue valiendo)")
+    bq.add_argument("--forzar", action="store_true", help="reconstruye aunque la huella del corpus no haya cambiado")
     cl = sub.add_parser("clasificar")
     cl.add_argument("--max", type=int, default=500, help="maximo de hechos clasificados por corrida (controla el costo)")
     cl.add_argument("--tiempo-max", type=int, default=900)
@@ -156,6 +160,10 @@ def main(argv=None) -> int:
             print(uni.a_markdown_verificacion(informe))
         for nombre in a.sugerir:
             print(uni.a_markdown_sugerencias(uni.sugerir(nombre, completo, confirmar=a.confirmar)))
+        return 0
+
+    if a.cmd == "tiempos":  # no usa el almacen
+        print(tmp.a_markdown(tmp.leer(os.environ.get("CNV_TIEMPOS", ""))))
         return 0
 
     almacen = alm.almacen_desde_entorno()
@@ -279,7 +287,7 @@ def main(argv=None) -> int:
         return 0
 
     if a.cmd == "busqueda":
-        r = bus.construir(almacen, universo, time.monotonic() + a.tiempo_max)
+        r = bus.construir(almacen, universo, time.monotonic() + a.tiempo_max, forzar=a.forzar)
         print("TOTAL", r)
         if r["estado"] != "ok":
             print("sin tiempo: no se publico el indice nuevo; el anterior sigue vigente. Subir --tiempo-max.")
@@ -353,6 +361,26 @@ def main(argv=None) -> int:
         print(f"  {e['empresa']}: +{r['nuevos']} nuevos, {r['fallidos']} fallidos, {r['pendientes']} pendientes", flush=True)
     print("TOTAL", total)
     return 0
+
+
+def main(argv=None) -> int:
+    """Corre el comando y anota cuanto tardo: una linea `TIEMPO <comando>: N s` en el log y, si CNV_TIEMPOS apunta a un archivo, una fila `comando<TAB>segundos`
+    (el workflow la junta en una tabla del resumen del job: `python -m cnv tiempos`)."""
+    args = list(sys.argv[1:] if argv is None else argv)
+    comando = args[0] if args and not args[0].startswith("-") else "?"
+    t0 = time.monotonic()
+    try:
+        return _ejecutar(argv)
+    finally:
+        seg = time.monotonic() - t0
+        print(f"TIEMPO {comando}: {seg:.1f} s", file=sys.stderr, flush=True)      # stderr: no ensucia la salida de los comandos que imprimen JSON/Markdown
+        ruta = os.environ.get("CNV_TIEMPOS")
+        if ruta and comando not in ("tiempos", "?"):
+            try:
+                with open(ruta, "a", encoding="utf-8", newline="\n") as f:
+                    f.write(f"{comando}\t{seg:.1f}\n")
+            except OSError:
+                pass
 
 
 if __name__ == "__main__":

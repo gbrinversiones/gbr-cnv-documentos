@@ -9,6 +9,7 @@ Estructura del bucket:
   cnv/indice/financieros.json.gz        tabla plana empresa/periodo/cifras
 """
 import gzip
+import hashlib
 import io
 import json
 import os
@@ -51,6 +52,18 @@ class AlmacenLocal:
     def existe(self, nombre: str) -> bool:
         return os.path.exists(self._ruta(nombre))
 
+    def firmas(self, prefijo: str) -> dict:
+        """{nombre: huella del contenido} de todo lo que empieza con `prefijo`. Sirve para saber si algo cambio SIN descargarlo (en GCS es un solo listado)."""
+        salida = {}
+        base = os.path.join(self.raiz, *prefijo.split("/")[:-1]) if "/" in prefijo else self.raiz
+        for carpeta, _, archivos in os.walk(base):
+            for a in archivos:
+                nombre = os.path.relpath(os.path.join(carpeta, a), self.raiz).replace(os.sep, "/")
+                if nombre.startswith(prefijo):
+                    with open(os.path.join(carpeta, a), "rb") as f:
+                        salida[nombre] = hashlib.sha1(f.read()).hexdigest()
+        return salida
+
 
 class AlmacenGCS:
     def __init__(self, bucket: str, credenciales_json: str | None = None):
@@ -66,11 +79,20 @@ class AlmacenGCS:
         self.bucket.blob(nombre).upload_from_string(datos)
 
     def leer(self, nombre: str) -> bytes | None:
-        b = self.bucket.blob(nombre)
-        return b.download_as_bytes() if b.exists() else None
+        """UN pedido (antes eran dos: `exists()` y despues la descarga). Un objeto inexistente es None; cualquier otro error se propaga."""
+        try:
+            return self.bucket.blob(nombre).download_as_bytes()
+        except Exception as error:
+            if type(error).__name__ != "NotFound":      # google.api_core.exceptions.NotFound (no se importa aca: el SDK de GCS se carga solo si hay bucket)
+                raise
+            return None
 
     def existe(self, nombre: str) -> bool:
         return self.bucket.blob(nombre).exists()
+
+    def firmas(self, prefijo: str) -> dict:
+        """{nombre: huella} de lo que empieza con `prefijo`, en UN listado (md5 / crc32c / generacion que informa GCS; no descarga nada)."""
+        return {b.name: b.md5_hash or b.crc32c or str(b.generation) for b in self.bucket.list_blobs(prefix=prefijo)}
 
 
 def almacen_desde_entorno():

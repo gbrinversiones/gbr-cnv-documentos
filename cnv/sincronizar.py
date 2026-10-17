@@ -1,6 +1,7 @@
 """Sincronizacion incremental de documentos de la CNV: lista, baja lo que falta, extrae texto y actualiza los indices."""
 import csv
 import datetime as dt
+import hashlib
 import json
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -231,8 +232,31 @@ def ocr_formularios(almacen, empresa: dict, limites: Limites | None = None, hast
     return {"leidos": leidos, "sin_texto": sin_texto, "pendientes": len(cola) - leidos - sin_texto}
 
 
-def construir_indice_global(almacen, empresas: list) -> int:
-    """Junta los indices por empresa en cnv/indice/global.json.gz (solo documentos con texto)."""
+RUTA_FIRMA_GLOBAL = "cnv/indice/global.firma.json"
+
+
+def firma_indices(almacen, empresas: list) -> str:
+    """Huella de los indices por empresa (cnv/indice/{cuit}.json) de `empresas`: si no cambia, el indice global tampoco. Un solo listado, no descarga nada."""
+    firmas = almacen.firmas("cnv/indice/")
+    partes = []
+    for e in sorted(empresas, key=lambda e: e["cuit"]):
+        partes.append(e["cuit"] + "=" + firmas.get("cnv/indice/" + e["cuit"] + ".json", "-"))
+    return hashlib.sha1("\n".join(partes).encode("utf-8")).hexdigest()
+
+
+def construir_indice_global(almacen, empresas: list, forzar: bool = False) -> int:
+    """Junta los indices por empresa en cnv/indice/global.json.gz (solo documentos con texto).
+    Si ningun indice por empresa cambio desde la ultima vez (huella en cnv/indice/global.firma.json) y el global existe, no lo reconstruye: devuelve la
+    cantidad guardada. `forzar` lo reconstruye igual."""
+    firma = firma_indices(almacen, empresas)
+    previa = almacen.leer(RUTA_FIRMA_GLOBAL)
+    if not forzar and previa and almacen.existe("cnv/indice/global.json.gz"):
+        try:
+            d = json.loads(previa)
+            if d.get("firma") == firma and isinstance(d.get("n"), int):
+                return d["n"]
+        except ValueError:
+            pass
     filas = []
     for e in empresas:
         for m in alm.leer_indice_empresa(almacen, e["cuit"]):
@@ -245,4 +269,5 @@ def construir_indice_global(almacen, empresas: list) -> int:
                 filas.append(fila)
     filas.sort(key=lambda m: (m["f"] or "", m["id"]), reverse=True)
     alm.guardar_si_cambio(almacen, "cnv/indice/global.json.gz", alm.comprimir(json.dumps(filas, ensure_ascii=False, separators=(",", ":")).encode("utf-8")))
+    alm.guardar_si_cambio(almacen, RUTA_FIRMA_GLOBAL, json.dumps({"firma": firma, "n": len(filas)}, separators=(",", ":")).encode("utf-8"))
     return len(filas)
