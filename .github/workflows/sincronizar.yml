@@ -27,6 +27,9 @@ on:
       tiempo_max:
         description: "Segundos maximos por fragmento"
         default: "18000"
+      tope_usd:
+        description: "Tope de gasto de la API en dolares POR PASO con modelo (CNV_MAX_USD): el paso se corta limpio al llegar. 6 pasos con modelo -> el maximo por corrida es 6x este valor"
+        default: "1"
       cupo_modelo:
         description: "Multiplicador de los topes de los pasos con modelo (financieros 150, resumenes 400, clasificar 500 y sus tiempos). 1 = diario; 4 = puesta al dia del atraso"
         default: "1"
@@ -111,6 +114,7 @@ jobs:
       issues: write         # solo para el issue diario de anomalias (paso «Alertas de salud»)
     timeout-minutes: 300  # topes propios de cada paso (~120 min con cupo 1; ~330 con cupo 4 que NO entra: usar cupo <= 3); con 30 se cancelaba a mitad
     env:
+      CNV_MAX_USD: ${{ github.event.inputs.tope_usd || '1' }}
       CUPO_MODELO: ${{ github.event.inputs.cupo_modelo || '1' }}
       COMPLETAR_CAMPOS: ${{ github.event.inputs.completar_campos || 'false' }}
       CNV_CONCURRENCIA: ${{ github.event.inputs.concurrencia || '2' }}
