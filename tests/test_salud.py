@@ -293,11 +293,11 @@ def test_cli_anomalias_escribe_el_cuerpo_solo_si_hay_y_guarda_la_foto(operativa,
 
 
 def test_el_workflow_crea_un_issue_por_dia_como_maximo():
-    import yaml
-
-    wf = yaml.safe_load(open(".github/workflows/sincronizar.yml", encoding="utf-8"))
-    job = wf["jobs"]["indice"]
-    assert job["permissions"]["issues"] == "write"
-    paso = next(p for p in job["steps"] if "anomalias" in p.get("run", ""))
-    assert "gh issue create" in paso["run"] and "created:>=" in paso["run"] and paso["if"] == "always()" and paso["continue-on-error"] is True
-    assert paso["env"]["GH_TOKEN"] == "${{ github.token }}"
+    """Sin PyYAML (no esta en requirements): se revisa el texto del paso."""
+    texto = open(".github/workflows/sincronizar.yml", encoding="utf-8").read()
+    job = texto[texto.index("\n  indice:"):]
+    assert "issues: write" in job.split("steps:")[0]
+    paso = job[job.index("- name: Alertas de salud"):]
+    paso = paso[:paso.index("\n      - name:", 10)]
+    assert "if: always()" in paso and "continue-on-error: true" in paso and "GH_TOKEN: ${{ github.token }}" in paso
+    assert "python -m cnv salud --anomalias" in paso and "created:>=$hoy" in paso and "gh issue create" in paso and 'if [ "$ya" = "0" ]' in paso
