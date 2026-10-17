@@ -41,3 +41,11 @@ def test_series_es_un_paso_final_del_job_indice_sin_modelo():
     paso = paso[:paso.index("\n      - name:", 10)]
     assert "python -m cnv series" in paso and "ANTHROPIC_API_KEY" not in paso and "if: always()" in paso and "continue-on-error: true" in paso
     assert job.index("python -m cnv exportar") < job.index("python -m cnv series") < job.index("python -m cnv tiempos")
+
+
+def test_el_workflow_puede_resetear_errores_de_api():
+    t = workflow()
+    assert "resetear_errores_api:" in t and 'default: "false"' in t.split("resetear_errores_api:")[1][:600]
+    paso = t[t.index("Resetear errores de API"):]
+    assert "github.event.inputs.resetear_errores_api == 'true'" in paso[:300] and "python -m cnv reintentos --reset" in paso[:500]
+    assert t.index("Resetear errores de API") < t.index("Extraer cifras de estados contables")        # antes de los pasos con modelo

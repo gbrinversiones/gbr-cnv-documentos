@@ -380,6 +380,8 @@ def ejecutar(almacen, empresas: list, cliente, max_docs: int = 200, hasta_t: flo
                     resultado = procesar_texto(texto_ocr, cliente, origen="ocr")
             return conc.Res(resultado, llamo=resultado["estado"] not in ("sin_texto", "no_es_pago_on", "formulario_sin_valores"))
         except Exception as error:  # red, API o JSON invalido: se reintenta (hasta MAX_INTENTOS)
+            if conc.es_error_de_cuenta(error):    # saldo / clave / limite sostenido: no es del documento, no cuenta intento
+                raise
             return conc.Res({"estado": "error", "error": f"{type(error).__name__}: {error}"}, llamo=True)
 
     def confirmar(e, m, res):

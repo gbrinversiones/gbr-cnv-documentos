@@ -36,6 +36,9 @@ on:
       tpm:
         description: "Tokens de ENTRADA por minuto que el pipeline puede gastar (CNV_TPM; defecto 150000 = ~30% del limite de 500000 de la cuenta, el resto queda para produccion)"
         default: "150000"
+      resetear_errores_api:
+        description: "true = antes de los pasos con modelo, devuelve a pendiente los documentos marcados con error de API/cuenta (sin saldo, clave, limites de tasa) con `python -m cnv reintentos --reset`. No toca errores de contenido. Default false"
+        default: "false"
       completar_campos:
         description: "true = el paso financieros vuelve a pedir (gasta modelo) los estados ya procesados con una version anterior del extractor para que sumen los campos nuevos (--completar-campos). Usar con cupo_modelo 3-4 hasta vaciar los pendientes. Default false"
         type: boolean
@@ -148,6 +151,10 @@ jobs:
         if: always()
         continue-on-error: true
         run: python -m cnv novedades
+      - name: Resetear errores de API/cuenta (solo si resetear_errores_api = true)
+        if: ${{ github.event.inputs.resetear_errores_api == 'true' }}
+        continue-on-error: true
+        run: python -m cnv reintentos --reset
       - name: Extraer cifras de estados contables (Claude Haiku, max 150 documentos)
         if: always()
         continue-on-error: true

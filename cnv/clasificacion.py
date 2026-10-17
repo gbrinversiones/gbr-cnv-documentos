@@ -129,6 +129,8 @@ def ejecutar(almacen, empresas: list, cliente, max_docs: int = 500, hasta_t: flo
             categoria, motivo = clasificar(cliente, e["empresa"], m.get("d", ""), texto, stats)
             return conc.Res({"categoria": categoria, "motivo": motivo, "stats": stats})
         except Exception as error:  # red o API: se reintenta en la proxima corrida, sin gastar un intento "de contenido"
+            if conc.es_error_de_cuenta(error):    # saldo / clave / limite sostenido: no es del documento, no cuenta intento
+                raise
             return conc.Res({"error": type(error).__name__, "stats": stats})
 
     def confirmar(e, m, res):
