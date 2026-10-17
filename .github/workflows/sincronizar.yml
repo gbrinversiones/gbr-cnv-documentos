@@ -163,6 +163,14 @@ jobs:
         run: |
           K="$CUPO_MODELO"; case "$K" in 1|2|3|4) ;; *) echo "cupo_modelo debe ser 1-4"; exit 1;; esac
           python -m cnv clasificar --max $((500*K)) --tiempo-max $((900*K))
+      - name: Eventos estructurados de hechos relevantes (Claude Haiku, max 150 por corrida)
+        if: always()
+        continue-on-error: true
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          K="$CUPO_MODELO"; case "$K" in 1|2|3|4) ;; *) echo "cupo_modelo debe ser 1-4"; exit 1;; esac
+          python -m cnv eventos --max $((150*K)) --tiempo-max $((900*K))
       - name: Estructurar avisos de pago de ONs (Claude Haiku, max 200 por corrida)
         if: always()
         continue-on-error: true

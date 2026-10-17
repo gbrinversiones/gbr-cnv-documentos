@@ -192,7 +192,7 @@ def operativa(tmp_path):
 
 
 def test_atraso_por_etapa(operativa):
-    assert salud.atraso(operativa, [VIVA, {"empresa": "SIN CUIT", "cuit": ""}]) == {"descargas": 2, "financieros": 1, "resumenes": 2, "clasificar": 2, "avisos_pago": 1, "condiciones": 1}
+    assert salud.atraso(operativa, [VIVA, {"empresa": "SIN CUIT", "cuit": ""}]) == {"descargas": 2, "financieros": 1, "resumenes": 2, "clasificar": 2, "avisos_pago": 1, "condiciones": 1, "eventos": 0}
 
 
 def test_errores_recurrentes_de_todas_las_etapas(operativa):
