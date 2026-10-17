@@ -12,11 +12,22 @@ on:
         description: "Verificar los CUIT del CSV contra la pagina de la CNV"
         type: boolean
         default: true
+      desde_byma:
+        description: "Buscar el CUIT de los emisores de ONs de BYMA que no estan en el universo (ons_byma.json del repo de assets); solo coincidencia exacta"
+        type: boolean
+        default: false
+      abrir_pr:
+        description: "Con desde_byma: agregar lo confirmado a data/universo.csv y data/ons.csv en una rama y abrir un PULL REQUEST (nada entra a la sincronizacion hasta que se mergee)"
+        type: boolean
+        default: false
 
 jobs:
   universo:
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    permissions:
+      contents: write        # solo para la rama del PR de emisores nuevos (abrir_pr); nunca se pushea a master
+      pull-requests: write
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -25,6 +36,7 @@ jobs:
           cache: pip
       - run: pip install -r requirements.txt
       - name: Informe
+        if: ${{ github.event.inputs.verificar == 'true' || github.event.inputs.sugerir != '' }}
         env:
           SUGERIR: ${{ github.event.inputs.sugerir }}
           VERIFICAR: ${{ github.event.inputs.verificar }}
@@ -34,6 +46,32 @@ jobs:
           IFS=';' read -ra nombres <<< "$SUGERIR"
           for n in "${nombres[@]}"; do [ -n "$(echo "$n" | xargs)" ] && args+=(--sugerir "$(echo "$n" | xargs)"); done
           python -m cnv universo "${args[@]}" | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Emisores de ONs de BYMA fuera del universo
+        if: ${{ github.event.inputs.desde_byma == 'true' }}
+        env:
+          ESCRIBIR: ${{ github.event.inputs.abrir_pr }}
+        run: |
+          curl -fsSL -o ons_byma.json "https://raw.githubusercontent.com/gbrinversiones/gbr-inversiones-assets/main/ons_byma.json"
+          args=(--sugerir-desde-byma ons_byma.json --tiempo-max 2400)
+          if [ "$ESCRIBIR" = "true" ]; then args+=(--escribir); fi
+          python -m cnv universo "${args[@]}" | tee -a "$GITHUB_STEP_SUMMARY"
+          rm -f ons_byma.json
+      - name: Pull request con los emisores confirmados
+        if: ${{ github.event.inputs.desde_byma == 'true' && github.event.inputs.abrir_pr == 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if git diff --quiet -- data/universo.csv data/ons.csv; then echo "Nada confirmado para agregar: no se abre PR (ver informes/emisores_por_revisar.json)."; exit 0; fi
+          rama="automatico/emisores-byma-${GITHUB_RUN_ID}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$rama"
+          git add data/universo.csv data/ons.csv informes/emisores_por_revisar.json
+          git commit -m "Emisores de ONs de BYMA con CUIT confirmado por la CNV (coincidencia exacta)"
+          git push origin "$rama"
+          gh pr create --base master --head "$rama" --title "Emisores de ONs de BYMA con CUIT confirmado por la CNV" \
+            --body "Generado por el workflow Verificar universo CNV (desde_byma + abrir_pr). Agrega SOLO emisores cuyo CUIT coincide exacto (autocompletado y pagina de la CNV) a data/universo.csv y sus ONs a data/ons.csv. Los dudosos estan en informes/emisores_por_revisar.json y NO se agregaron. Al mergear, la proxima sincronizacion descarga los documentos de estos emisores: mergear implica aprobar ese costo." \
+            || echo "No se pudo abrir el PR (¿esta desactivado 'Allow GitHub Actions to create pull requests'?). La rama $rama quedo publicada; abrirlo a mano."
       - uses: actions/upload-artifact@v4
         if: always()
         with:

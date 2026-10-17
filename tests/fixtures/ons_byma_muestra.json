@@ -1,0 +1,14 @@
+{"generado": "2026-10-17T02:11:32Z", "instrumento": "ON (muestra de prueba)", "puntos": [
+ {"ticker": "YM41O", "emisor": "YPF S.A.", "fecha_vencimiento": "2041-02-01"},
+ {"ticker": "YM37O", "emisor": "YPF S.A.", "fecha_vencimiento": "2037-03-01"},
+ {"ticker": "AA1O", "emisor": "EMISORA A S.A.", "fecha_vencimiento": "2028-01-01"},
+ {"ticker": "ZN1O", "emisor": "ÁRBOL NUEVO S.A.C.I.F.I.A.", "fecha_vencimiento": "2030-05-05"},
+ {"ticker": "ZN2O", "emisor": "ÁRBOL NUEVO S.A.C.I.F.I.A.", "fecha_vencimiento": null},
+ {"ticker": "PH1D", "emisor": "PUENTES HNOS S.A.", "fecha_vencimiento": "2027-09-09"},
+ {"ticker": "ED1O", "emisor": "EDESA S.A.", "fecha_vencimiento": "2029-01-01"},
+ {"ticker": "VM1O", "emisor": "VACA MUERTA OIL SUR S.A.", "fecha_vencimiento": "2028-08-08"},
+ {"ticker": "CC1O", "emisor": "C&C MEDICALS S.A.", "fecha_vencimiento": "2027-07-07"},
+ {"ticker": "RR1O", "emisor": "RED CAIDA S.A.", "fecha_vencimiento": "2027-01-01"},
+ {"ticker": "YM41O", "emisor": "YPF S.A.", "fecha_vencimiento": "2041-02-01"},
+ {"ticker": "", "emisor": "SIN TICKER S.A."}
+], "excluidos": {"sin_precio_o_tir": 1}}
