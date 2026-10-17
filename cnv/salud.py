@@ -6,15 +6,26 @@ documentos nuevos hace mas de N dias), las que no tienen ningun documento y las 
 """
 import csv
 import datetime as dt
+import json
 from collections import Counter
 
 from . import almacen as alm
+from . import avisos_pago as _avisos
+from . import clasificacion as _clasificacion
+from . import condiciones as _condiciones
+from . import financieros as _financieros
+from . import resumenes as _resumenes
 from .avisos_pago import leer_avisos
 from .financieros import leer_financieros
 from .sincronizar import MAX_INTENTOS, TIPOS_TEXTO
 
 DIAS_SILENCIO = 60  # sin documentos nuevos hace mas que esto -> silenciosa
 DIAS_ACTIVIDAD = 365  # "activa" = tuvo algun documento en el ultimo anio (si no, no se espera nada nuevo)
+RUTA_ESTADO = "cnv/indice/salud_estado.json"   # foto de la corrida anterior: las alertas comparan contra ella para no repetirse
+DIAS_SIN_DESCARGAS = 7        # ningun documento nuevo en toda la base hace mas que esto -> la descarga esta detenida
+CRECIMIENTO_ATRASO = (100, 0.05)  # un atraso por etapa que crece en >= 100 documentos Y >= 5% desde la corrida anterior
+CRECIMIENTO_ERRORES = 5       # documentos que agotaron sus intentos (3) desde la corrida anterior
+CRECIMIENTO_SILENCIOSAS = 3   # empresas silenciosas nuevas desde la corrida anterior
 
 
 def cuit_valido(cuit: str) -> bool:
@@ -103,6 +114,33 @@ def _empresa(almacen, e: dict, hoy: dt.date, dias_silencio: int) -> dict:
     }
 
 
+def atraso(almacen, empresas: list) -> dict:
+    """Documentos pendientes por etapa (lo que la proxima corrida todavia tiene que procesar). Solo lee; mismas reglas que cada etapa."""
+    con_cuit = [{"empresa": e["empresa"], "cuit": e["cuit"]} for e in empresas if e["cuit"]]
+    sin_bajar = sum(1 for e in con_cuit for m in alm.leer_indice_empresa(almacen, e["cuit"]) if not m.get("texto_ok") and m.get("t") in TIPOS_TEXTO and m.get("intentos", 0) < MAX_INTENTOS)
+    return {"descargas": sin_bajar, "financieros": len(_financieros.candidatos(almacen, con_cuit)), "resumenes": len(_resumenes.pendientes(almacen, con_cuit)),
+            "clasificar": len(_clasificacion.pendientes(almacen, con_cuit)), "avisos_pago": len(_avisos.candidatos(almacen, con_cuit)),
+            "condiciones": len(_condiciones.candidatos(almacen, con_cuit))}
+
+
+def errores_recurrentes(almacen, empresas: list) -> list:
+    """Documentos que agotaron sus intentos (MAX_INTENTOS = 3) en alguna etapa y por eso ya no se reintentan solos."""
+    salida = []
+    for e in empresas:
+        if not e["cuit"]:
+            continue
+        for m in alm.leer_indice_empresa(almacen, e["cuit"]):
+            if not m.get("texto_ok") and m.get("t") in TIPOS_TEXTO and m.get("intentos", 0) >= MAX_INTENTOS:
+                salida.append({"etapa": "descarga", "empresa": e["empresa"], "cuit": e["cuit"], "doc": m["id"], "intentos": m["intentos"], "motivo": m.get("error") or "sin motivo registrado"})
+            if m.get("t") == "hechos" and m.get("texto_ok") and not m.get("k") and m.get("kx", 0) >= _clasificacion.MAX_INTENTOS:
+                salida.append({"etapa": "clasificar", "empresa": e["empresa"], "cuit": e["cuit"], "doc": m["id"], "intentos": m["kx"], "motivo": "sin categoria con cita verificada tras los reintentos"})
+        for etapa, leer in (("financieros", leer_financieros), ("avisos_pago", leer_avisos), ("condiciones", _condiciones.leer_condiciones)):
+            for doc, p in leer(almacen, e["cuit"])["procesados"].items():
+                if p.get("estado") == "error" and p.get("intentos", 0) >= MAX_INTENTOS:
+                    salida.append({"etapa": etapa, "empresa": e["empresa"], "cuit": e["cuit"], "doc": doc, "intentos": p["intentos"], "motivo": p.get("error") or "sin motivo registrado"})
+    return sorted(salida, key=lambda x: (x["etapa"], x["empresa"], int(x["doc"])))
+
+
 def calcular(almacen, universo_completo: list, hoy: dt.date | None = None, dias_silencio: int = DIAS_SILENCIO) -> dict:
     """Informe completo (dict serializable). `universo_completo` son las filas del CSV, con o sin CUIT."""
     hoy = hoy or dt.date.today()
@@ -138,6 +176,7 @@ def calcular(almacen, universo_completo: list, hoy: dt.date | None = None, dias_
                                for e in empresas if e["silenciosa"]), key=lambda x: -x["dias"]),
         "sin_documentos": [{"empresa": e["empresa"], "cuit": e["cuit"]} for e in empresas if e["documentos"] == 0],
         "universo_sin_cuit": sin_cuit, "universo_cuit_invalido": cuit_malo,
+        "atraso": atraso(almacen, universo_completo), "errores_recurrentes": errores_recurrentes(almacen, universo_completo),
         "empresas": sorted(empresas, key=lambda e: e["empresa"]),
     }
 
@@ -164,6 +203,12 @@ def a_markdown(inf: dict, max_fallidos: int = 30) -> str:
           f"| Categorías | {c['categorias']['clasificados']}/{c['categorias']['hechos_con_texto']} ({_pct(c['categorias'])}) |",
           f"| Cifras de estados contables | {c['cifras']['con_cifras']}/{c['cifras']['estados_con_texto']} ({_pct(c['cifras'])}) |",
           f"| Avisos de pago estructurados | {c['avisos_pago']['estructurados']}/{c['avisos_pago']['avisos_con_texto']} ({_pct(c['avisos_pago'])}) |"]
+    a = inf["atraso"]
+    L += ["", "### Atraso por etapa (pendientes para la próxima corrida)", "", "| Etapa | Pendientes |", "|---|--:|"]
+    L += [f"| {etapa.replace('_', ' ')} | {n} |" for etapa, n in a.items()]
+    rec = inf["errores_recurrentes"]
+    L += ["", f"### Documentos con errores recurrentes ({len(rec)}, agotaron {MAX_INTENTOS} intentos; se muestran {min(len(rec), max_fallidos)})"]
+    L += [f"- {x['etapa']}: {x['empresa']} #{x['doc']} — {x['motivo']}" for x in rec[:max_fallidos]] or ["- ninguno"]
     L += ["", f"### Empresas silenciosas (activas, sin documentos hace más de {inf['dias_silencio']} días): {len(inf['silenciosas'])}"]
     L += [f"- {s['empresa']} ({s['cuit']}): último documento {s['ultimo_documento']} (hace {s['dias']} días)" for s in inf["silenciosas"]] or ["- ninguna"]
     L += ["", f"### Empresas sin ningún documento: {len(inf['sin_documentos'])}"]
@@ -181,4 +226,68 @@ def a_markdown(inf: dict, max_fallidos: int = 30) -> str:
         L.append(f"| {e['empresa']}{marca} | {e['documentos']} | {e['ultimo_documento'] or '-'} | {n('hechos')} | {n('estados_contables')} | {n('prospectos')} | {n('avisos_pago')} | {n('actas')} | "
                  f"{len(e['fallidos'])} | {e['escaneados']} | {_pct(e['cobertura']['resumenes'])} | {_pct(e['cobertura']['cifras'])} |")
     L += ["", "</details>", ""]
+    return "\n".join(L)
+
+
+# ---------------------------------------------------------------------------
+# Anomalias y alertas (issue de GitHub, como maximo una por dia)
+# ---------------------------------------------------------------------------
+
+def metricas(inf: dict) -> dict:
+    """Foto numerica del informe, lo que se guarda entre corridas para comparar."""
+    return {"fecha": inf["fecha"], "atraso": dict(inf["atraso"]), "errores_recurrentes": len(inf["errores_recurrentes"]), "silenciosas": len(inf["silenciosas"]),
+            "universo_sin_cuit": len(inf["universo_sin_cuit"]), "universo_cuit_invalido": len(inf["universo_cuit_invalido"])}
+
+
+def leer_estado(almacen):
+    """Foto de la corrida anterior o None (primera corrida o archivo ilegible)."""
+    crudo = almacen.leer(RUTA_ESTADO)
+    if not crudo:
+        return None
+    try:
+        d = json.loads(crudo)
+        return d if isinstance(d, dict) and isinstance(d.get("atraso"), dict) else None
+    except ValueError:
+        return None
+
+
+def guardar_estado(almacen, inf: dict) -> None:
+    alm.guardar_si_cambio(almacen, RUTA_ESTADO, json.dumps(metricas(inf), ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode("utf-8"))
+
+
+def anomalias(inf: dict, previo, hoy: dt.date | None = None) -> list:
+    """[{"codigo", "detalle"}]. Solo cosas que NO son el estado normal de una carga en curso: un atraso grande que baja no alerta; uno que crece, si.
+    Sin foto previa (primera corrida) solo puede alertar la regla absoluta de descarga detenida: lo demas se compara contra la corrida anterior."""
+    hoy = hoy or dt.date.fromisoformat(inf["fecha"])
+    salida = []
+    ultimos = [_fecha(e["ultimo_documento"]) for e in inf["empresas"] if e["ultimo_documento"]]
+    ultimo = max((u for u in ultimos if u), default=None)
+    if ultimo and (hoy - ultimo).days > DIAS_SIN_DESCARGAS:
+        salida.append({"codigo": "descarga_detenida", "detalle": f"el documento mas nuevo de toda la base es del {ultimo.isoformat()} (hace {(hoy - ultimo).days} dias; limite {DIAS_SIN_DESCARGAS})"})
+    if previo is None:
+        return salida
+    for etapa, n in inf["atraso"].items():
+        antes = previo["atraso"].get(etapa)
+        if antes is not None and n - antes >= CRECIMIENTO_ATRASO[0] and n >= antes * (1 + CRECIMIENTO_ATRASO[1]):
+            salida.append({"codigo": "atraso_creciente", "detalle": f"{etapa}: {antes} -> {n} pendientes (+{n - antes}) desde el {previo.get('fecha')}"})
+    rec, antes = len(inf["errores_recurrentes"]), previo.get("errores_recurrentes", 0)
+    if rec - antes >= CRECIMIENTO_ERRORES:
+        salida.append({"codigo": "errores_recurrentes", "detalle": f"{antes} -> {rec} documentos que agotaron {MAX_INTENTOS} intentos (+{rec - antes})"})
+    sil, antes = len(inf["silenciosas"]), previo.get("silenciosas", 0)
+    if sil - antes >= CRECIMIENTO_SILENCIOSAS:
+        salida.append({"codigo": "empresas_silenciosas", "detalle": f"{antes} -> {sil} empresas activas sin documentos hace mas de {inf['dias_silencio']} dias"})
+    for clave, texto in (("universo_sin_cuit", "filas del universo sin CUIT"), ("universo_cuit_invalido", "filas del universo con CUIT invalido")):
+        n, antes = len(inf[clave]), previo.get(clave, 0)
+        if n > antes:
+            salida.append({"codigo": clave, "detalle": f"{antes} -> {n} {texto}"})
+    return salida
+
+
+def a_markdown_anomalias(anoms: list, inf: dict) -> str:
+    """Cuerpo del issue de GitHub. Repo publico: solo conteos y nombres de empresas del universo, nada sensible."""
+    L = [f"## Anomalías en la base CNV ({inf['fecha']})", ""]
+    L += [f"- **{a['codigo']}**: {a['detalle']}" for a in anoms]
+    L += ["", "| Etapa | Pendientes |", "|---|--:|"] + [f"| {e.replace('_', ' ')} | {n} |" for e, n in inf["atraso"].items()]
+    L += ["", f"Documentos con errores recurrentes: {len(inf['errores_recurrentes'])} · empresas silenciosas: {len(inf['silenciosas'])} · documentos: {inf['resumen']['documentos']}",
+          "", "El detalle completo está en el resumen del job `indice` del workflow *Sincronizar documentos CNV*. Este issue se crea como máximo una vez por día y solo si hay anomalías respecto de la corrida anterior.", ""]
     return "\n".join(L)
