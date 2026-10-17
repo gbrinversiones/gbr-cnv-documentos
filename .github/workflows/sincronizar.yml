@@ -90,7 +90,7 @@ jobs:
     needs: [descargar, ocr]
     if: always()
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 170  # suma de los topes propios de cada paso (~120 min) con margen; con 30 el job se cancelaba a mitad de camino
     env:
       GCS_BUCKET: ${{ vars.GCS_BUCKET }}
       GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
