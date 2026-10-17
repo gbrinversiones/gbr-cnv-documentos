@@ -10,6 +10,7 @@
   python -m cnv ocr [--max-docs N] [--tiempo-max 7200]   # OCR de los escaneados; requiere tesseract (ver cnv/ocr.py)
   python -m cnv novedades [--dias 7] [--hoy AAAA-MM-DD]   # documentos nuevos y lo presentado en los ultimos dias (sin modelo)
   python -m cnv cobertura [--ons data/ons.csv] [--hoy AAAA-MM-DD]   # cruce emisores/ONs con documentos y datos (sin modelo)
+  python -m cnv auditar-cifras                    # inconsistencias contables en cnv/financieros; las cifras marcadas quedan fuera de los ratios (sin modelo)
   python -m cnv ratios                            # ratios por emisor y periodo desde las cifras verificadas (sin modelo)
   python -m cnv busqueda [--tiempo-max 1500]      # indice de texto completo (BM25) para el buscador; reconstruye todo
   python -m cnv clasificar [--max 500] [--tiempo-max 900]
@@ -24,6 +25,7 @@ import sys
 import time
 
 from . import almacen as alm
+from . import auditoria as aud
 from . import avisos_pago as avp
 from . import busqueda as bus
 from . import clasificacion as cla
@@ -82,6 +84,7 @@ def main(argv=None) -> int:
     oc.add_argument("--tiempo-max", type=int, default=7200)
     oc.add_argument("--solo", default=None, help="CUIT: procesa solo esa empresa")
     sub.add_parser("ratios")
+    sub.add_parser("auditar-cifras")
     nv = sub.add_parser("novedades")
     nv.add_argument("--dias", type=int, default=nov.DIAS, help="ventana en dias segun la fecha de presentacion")
     nv.add_argument("--hoy", default=None, help="AAAA-MM-DD (para reproducir un informe)")
@@ -170,6 +173,10 @@ def main(argv=None) -> int:
     if a.cmd == "cobertura":
         r = cob.construir(almacen, universo, cob.leer_ons(a.ons), dt.date.fromisoformat(a.hoy) if a.hoy else None)
         print("TOTAL", json.dumps(r, ensure_ascii=False))
+        return 0
+
+    if a.cmd == "auditar-cifras":
+        print("TOTAL", json.dumps(aud.construir(almacen, universo), ensure_ascii=False))
         return 0
 
     if a.cmd == "ratios":

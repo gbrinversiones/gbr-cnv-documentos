@@ -15,6 +15,7 @@ Descarga los documentos **públicos** que las empresas argentinas presentan en l
 - `python -m cnv clasificar`: asigna una categoría cerrada (`k`) a cada hecho relevante (ver abajo).
 - `python -m cnv novedades`: documentos nuevos entre corridas y lo presentado en los últimos 7 días, para la landing (sin modelo; ver abajo).
 - `python -m cnv cobertura`: cruza emisores y ONs con documentos y datos verificados; lista los huecos (sin modelo; ver abajo).
+- `python -m cnv auditar-cifras`: marca inconsistencias contables en las cifras; las marcadas quedan fuera de los ratios (sin modelo; ver «Auditoría de cifras»).
 - `python -m cnv ratios`: ratios por emisor y periodo desde las cifras verificadas (sin modelo; ver abajo).
 - `python -m cnv avisos-pago`: estructura los avisos de pago de ONs ya descargados (ver abajo).
 - El workflow `Sincronizar documentos CNV` corre todos los días (y se puede disparar a mano para cargas grandes).
@@ -70,6 +71,21 @@ python -m cnv financieros --max 20 --solo 30546689979 --tiempo-max 600
 - **Huecos** (avisos accionables, no errores): `sin_documentos`, `sin_estados_contables`, `estados_contables_sin_cifras`, `estado_contable_desactualizado` (cierre de hace más de 200 días), `sin_prospectos` y `sin_avisos_de_pago` (solo si el emisor tiene ONs), `avisos_de_pago_sin_estructurar`, `documentos_fallidos`, `documentos_sin_bajar`, `sin_actividad_reciente` (más de 120 días). `ons_sin_emisor`: ONs cuyo CUIT falta (`sin_cuit_en_ons_csv`) o cuyo emisor no está en el universo (`emisor_fuera_del_universo`, o sea que no se están bajando sus documentos).
 - Depende de la fecha (`al`) para los huecos por antigüedad, así que el archivo puede cambiar de un día para otro aunque no haya documentos nuevos; no se vuelve a escribir si el contenido es igual.
 
+## Auditoría de cifras (`cnv/auditoria.py`)
+Una cifra puede estar bien respaldada por su cita y aun así estar mal (otra fila, la columna comparativa, una escala mal declarada). `python -m cnv auditar-cifras` (sin modelo, US$ 0) cruza las cifras de `cnv/financieros` entre sí y escribe `cnv/indice/auditoria_cifras.json.gz`; corre en el job `indice` **antes** de `ratios`.
+| Regla | Qué detecta | Cifras marcadas |
+|---|---|---|
+| `balance_no_cuadra` | activo ≠ pasivo + patrimonio fuera del 1 % | activo_total, pasivo_total, patrimonio_neto |
+| `resultado_neto_mayor_que_ventas` / `resultado_operativo_mayor_que_ventas` | el resultado supera a las ventas (ventas > 0) | el resultado y ventas |
+| `signo_raro` | ventas, activos, pasivos, efectivo, deuda o depreciaciones negativos (el patrimonio y los resultados sí pueden serlo) | la cifra |
+| `parte_mayor_que_el_todo` | activo corriente > activo total, pasivo corriente > pasivo total, efectivo > activo total, deuda financiera > pasivo total (tolerancia 1 %) | las dos |
+| `salto_entre_periodos` | una cifra, en unidades absolutas, cambia más de 50 veces entre dos periodos consecutivos del mismo emisor (mismo tipo de balance y misma moneda) | con 3 o más periodos, el más alejado de la mediana de la serie; con 2, los dos |
+| `unidad_incoherente` | el salto anterior coincide con un cambio de la escala declarada (miles ↔ millones ↔ unidades), típico error de ×1000 | idem |
+| `escala_cambia` / `moneda_cambia` | el emisor cambió de unidad o de moneda (severidad `info`: no se marca ninguna cifra; entre monedas distintas no se compara) | — |
+- **Efecto en los ratios:** `ratios` lee `cnv/indice/auditoria_cifras.json.gz` y un ratio que usa una cifra marcada queda `null` con motivo `cifra_sospechosa:<campos>`; el periodo trae `sospechosas` (las cifras presentes pero excluidas) y ese insumo no figura en `insumos`. Los ratios que no la usan se calculan igual. Si la auditoría todavía no corrió (o su archivo está ilegible), los ratios se calculan como antes (`"auditoria_cifras": false`).
+- **Formato:** `{"version":1,"resumen":{periodos, hallazgos, por_regla, periodos_con_cifras_sospechosas, cifras_sospechosas},"hallazgos":[{cuit, empresa, doc, periodo, tipo, balance, regla, severidad, campos, detalle}],"sospechosas":{cuit:{doc_id:[campo]}}}`. Severidad `sospechosa` = queda fuera de los ratios; `info` = solo se informa.
+- **Limitaciones conocidas:** el patrimonio que extrae `financieros` puede ser el atribuible a los propietarios (sin participaciones no controladoras); en grupos con minoritarios importantes `balance_no_cuadra` puede dar falsos positivos y excluir endeudamiento y ROE de ese periodo (queda registrado con el desvío exacto en `detalle`). Es el costo de preferir un ratio ausente a uno dudoso. La regla de saltos también puede marcar crecimiento real de más de 50 veces (poco probable entre periodos consecutivos).
+
 ## Ratios por emisor (`cnv/ratios.py`)
 `python -m cnv ratios` calcula, por emisor y periodo, a partir de las cifras **ya verificadas** de `cnv/financieros/{cuit}.json` (no usa el modelo, cuesta US$ 0) y escribe `cnv/indice/ratios.json.gz`.
 | Ratio | Fórmula | Condiciones |
@@ -80,7 +96,7 @@ python -m cnv financieros --max 20 --solo 30546689979 --tiempo-max 600
 | `margen_neto` | resultado_neto / ventas | ventas > 0 |
 | `roe` | resultado_neto / patrimonio_neto (al cierre, no promedio) | solo periodos **anuales**; patrimonio > 0 |
 | `cobertura_intereses` | resultado_operativo / \|intereses\| | intereses ≠ 0 |
-- **Reglas:** todas las cifras de un ratio deben ser del mismo periodo (cierre, tipo y acumulado), la misma moneda, la misma unidad/escala y el mismo tipo de balance (consolidado/individual); si falta una cifra o algo no cierra, el ratio es `null` y `motivos[ratio]` dice por qué (`falta_cifra:<campos>`, `periodos_distintos`, `monedas_distintas`, `unidades_distintas`, `moneda_desconocida`, `division_por_cero`, `patrimonio_negativo`, `periodo_no_anual`, …). Nunca se estima, no se anualizan trimestres ni semestres (por eso `roe` y `deuda_ebitda` quedan `null` con `periodo_no_anual` en periodos parciales) y no se completa una cifra con la de otro documento. Un estado contable procesado antes de la versión 4 no tiene las cifras nuevas: su liquidez, deuda/EBITDA y cobertura quedan `null` (`falta_cifra`) hasta completarlo con `--completar-campos`.
+- **Reglas:** todas las cifras de un ratio deben ser del mismo periodo (cierre, tipo y acumulado), la misma moneda, la misma unidad/escala y el mismo tipo de balance (consolidado/individual); si falta una cifra o algo no cierra, el ratio es `null` y `motivos[ratio]` dice por qué (`falta_cifra:<campos>`, `periodos_distintos`, `monedas_distintas`, `unidades_distintas`, `moneda_desconocida`, `division_por_cero`, `patrimonio_negativo`, `periodo_no_anual`, `cifra_sospechosa`, …). Nunca se estima, no se anualizan trimestres ni semestres (por eso `roe` y `deuda_ebitda` quedan `null` con `periodo_no_anual` en periodos parciales) y no se completa una cifra con la de otro documento. Un estado contable procesado antes de la versión 4 no tiene las cifras nuevas: su liquidez, deuda/EBITDA y cobertura quedan `null` (`falta_cifra`) hasta completarlo con `--completar-campos`.
 - **Trazabilidad:** cada periodo trae `doc` (el documento de origen en `cnv/financieros`), `insumos` (`valor` y `pagina` de cada cifra), `derivados` (`ebitda`) y `periodo_verificado` / `balance_coherente` tal como figuran en financieros. Si dos documentos traen el mismo periodo queda el más nuevo; consolidado e individual van por separado.
 - **Formato:** `{"version":1,"formulas":{...},"emisores":{cuit:{"empresa","periodos":[{periodo,tipo,acumulado,balance,moneda,unidad,escala,doc,periodo_verificado,balance_coherente,insumos,derivados,ratios,motivos}]}}}`, ordenado por cierre descendente, gzip determinista. El workflow lo corre en el job `indice` justo después de `financieros`.
 
@@ -190,6 +206,9 @@ Una fila por empresa/periodo/tipo/acumulado/balance: `cuit, empresa, periodo, ti
 
 ### `cnv/indice/novedades.json` y `cnv/indice/vistos.json`
 Ver «Novedades». `vistos.json` es estado interno entre corridas (no lo lee la landing).
+### `cnv/indice/auditoria_cifras.json.gz`
+Ver «Auditoría de cifras».
+
 ### `cnv/indice/cobertura.json.gz`
 Ver «Cobertura por emisor y ON».
 

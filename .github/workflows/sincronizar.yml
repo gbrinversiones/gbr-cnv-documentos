@@ -108,6 +108,9 @@ jobs:
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: python -m cnv financieros --max 150 --tiempo-max 1200
+      - name: Auditoria contable de las cifras (sin modelo)
+        continue-on-error: true
+        run: python -m cnv auditar-cifras
       - name: Ratios por emisor (desde las cifras verificadas; sin modelo)
         continue-on-error: true
         run: python -m cnv ratios
