@@ -10,7 +10,7 @@ Salida: cnv/indice/ratios.json.gz
        "insumos": {campo: {"valor", "pagina"}}, "derivados": {"ebitda": ...}, "ratios": {nombre: valor | null}, "motivos": {nombre: motivo}}]}}}
 """
 from . import almacen as alm
-from .financieros import leer_financieros
+from .financieros import leer_financieros, moneda_canonica
 
 VERSION = 1
 
@@ -87,6 +87,8 @@ def calcular_ratio(nombre: str, insumos: dict, sospechosas=frozenset()) -> tuple
     if malas:
         return None, "cifra_sospechosa:" + ",".join(malas), {}
     faltan = [c for c in campos if c not in insumos]
+    if faltan == ["intereses"]:
+        return None, "sin_linea_intereses", {}          # el estado no trae una linea propia de intereses: es un dato que no existe, no un error
     if faltan:
         return None, "falta_cifra:" + ",".join(faltan), {}
     usados = [insumos[c] for c in campos]
@@ -137,11 +139,26 @@ def calcular_ratio(nombre: str, insumos: dict, sospechosas=frozenset()) -> tuple
     return r, m, {"ebitda": ebitda}
 
 
+def derivar_deuda_financiera(insumos: dict, sospechosas=frozenset()):
+    """`deuda_financiera` = corriente + no corriente cuando el estado NO trae el total pero si los dos componentes (mismo periodo, moneda, unidad y balance,
+    ninguno sospechoso). Es una suma de dos cifras verificadas, no una estimacion; queda marcada como derivada para que se vea de donde sale."""
+    if "deuda_financiera" in insumos:
+        return None
+    c, n = insumos.get("deuda_financiera_corriente"), insumos.get("deuda_financiera_no_corriente")
+    if not c or not n or {"deuda_financiera_corriente", "deuda_financiera_no_corriente"} & set(sospechosas) or contexto_comun([c, n]):
+        return None
+    return {**c, "valor": c["valor"] + n["valor"], "pagina": None, "derivado": "deuda_financiera_corriente + deuda_financiera_no_corriente"}
+
+
 def ratios_de_periodo(p: dict, sospechosas=frozenset()) -> dict:
     """Fila de un periodo de financieros: insumos, derivados, ratios y motivos de los que no se pudieron calcular."""
     insumos = {c: contexto(p, c) for c in {x for e in ENTRADAS.values() for x in e}}
     insumos = {c: i for c, i in insumos.items() if i}
     ratios, motivos, derivados = {}, {}, {}
+    total = derivar_deuda_financiera(insumos, sospechosas)
+    if total:
+        insumos["deuda_financiera"] = total
+        derivados["deuda_financiera"] = total["valor"]
     for nombre in ENTRADAS:
         valor, motivo, deriv = calcular_ratio(nombre, insumos, sospechosas)
         ratios[nombre] = valor
@@ -153,8 +170,8 @@ def ratios_de_periodo(p: dict, sospechosas=frozenset()) -> dict:
         "periodo": p.get("periodo"), "tipo": p.get("tipo"), "acumulado": p.get("acumulado"), "balance": p.get("balance", "desconocido"),
         "moneda": p.get("moneda"), "unidad": p.get("unidad"), "escala": p.get("escala"), "doc": p.get("doc"),
         "periodo_verificado": p.get("periodo_verificado"), "balance_coherente": p.get("balance_coherente"),
-        "insumos": {c: {"valor": insumos[c]["valor"], "pagina": insumos[c]["pagina"]} for c in usados},
-        "derivados": derivados, "ratios": ratios, "motivos": motivos,
+        "insumos": {c: {"valor": insumos[c]["valor"], "pagina": insumos[c]["pagina"], **({"derivado": insumos[c]["derivado"]} if insumos[c].get("derivado") else {})} for c in usados},
+        "derivados": derivados, "ratios": ratios, "motivos": motivos, "ratios_calculados": sum(v is not None for v in ratios.values()),
     }
     malas = sorted(c for c in sospechosas if c in insumos)
     if malas:
@@ -163,13 +180,31 @@ def ratios_de_periodo(p: dict, sospechosas=frozenset()) -> dict:
 
 
 def periodos_vigentes(periodos: list) -> list:
-    """Un periodo por (cierre, tipo, acumulado, balance): si dos documentos traen el mismo, queda el mas nuevo (igual que el indice de financieros)."""
+    """Un periodo por (cierre, tipo, acumulado, balance, moneda): si dos documentos traen el mismo, queda el mas nuevo (igual que el indice de financieros).
+    El consolidado en dolares y el consolidado en pesos del mismo cierre son dos filas (antes la mas vieja se perdia)."""
     vistos = {}
     for p in periodos:
-        clave = (p["periodo"], p["tipo"], p["acumulado"], p.get("balance", "desconocido"))
+        clave = (p["periodo"], p["tipo"], p["acumulado"], p.get("balance", "desconocido"), moneda_canonica(p.get("moneda")))
         if clave not in vistos or int(p["doc"]) > int(vistos[clave]["doc"]):
             vistos[clave] = p
     return sorted(vistos.values(), key=lambda p: (p["periodo"], p.get("balance", ""), int(p["doc"])), reverse=True)
+
+
+RANGO_BALANCE = {"consolidado": 0, "individual": 1}
+
+
+def seleccionar_ficha(filas: list) -> list:
+    """UNA fila por cierre (periodo, tipo, acumulado) para mostrar en la ficha, con las demas como `alternativas` (balance, moneda, doc y ratios calculados).
+    Orden de preferencia: 1) CONSOLIDADO antes que individual (desconocido al final); 2) la que tenga mas ratios calculables; 3) en dolares (moneda funcional
+    habitual de los emisores que reportan en dos monedas); 4) el documento mas nuevo. Cada fila conserva `balance` y `moneda` explicitos."""
+    grupos = {}
+    for f in filas:
+        grupos.setdefault((f["periodo"], f["tipo"], f["acumulado"]), []).append(f)
+    salida = []
+    for fs in grupos.values():
+        orden = sorted(fs, key=lambda f: (RANGO_BALANCE.get(f.get("balance"), 2), -f["ratios_calculados"], 0 if moneda_canonica(f.get("moneda")) == "dolares" else 1, -int(f["doc"])))
+        salida.append({**orden[0], "alternativas": [{"balance": f.get("balance"), "moneda": f.get("moneda"), "doc": f["doc"], "ratios_calculados": f["ratios_calculados"]} for f in orden[1:]]})
+    return sorted(salida, key=lambda f: (f["periodo"], f["tipo"] or ""), reverse=True)
 
 
 def construir(almacen, empresas: list) -> dict:
@@ -185,9 +220,11 @@ def construir(almacen, empresas: list) -> dict:
         if not periodos:
             continue
         filas = [ratios_de_periodo(p, auditadas.get(e["cuit"], {}).get(p["doc"], frozenset())) for p in periodos]
-        emisores[e["cuit"]] = {"empresa": e["empresa"], "periodos": filas}
+        ficha = seleccionar_ficha(filas)
+        emisores[e["cuit"]] = {"empresa": e["empresa"], "periodos": filas, "ficha": ficha}
         stats["emisores"] += 1
         stats["periodos"] += len(filas)
+        stats["ficha"] = stats.get("ficha", 0) + len(ficha)
         for f in filas:
             for n, v in f["ratios"].items():
                 if v is None:

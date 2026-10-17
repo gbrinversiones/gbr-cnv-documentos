@@ -23,7 +23,7 @@ import json
 import math
 
 from . import almacen as alm
-from .financieros import leer_financieros
+from .financieros import leer_financieros, moneda_canonica  # noqa: F401  (moneda_canonica vive en financieros; se re-exporta aca)
 
 VERSION = 1
 TOLERANCIA = 0.01           # 1% para el balance y para "parte mayor que el todo"
@@ -37,18 +37,6 @@ TOLERANCIA_DEUDA = 0.05     # la suma corriente + no corriente puede diferir del
 EN_SERIE = ("ventas", "activo_total", "pasivo_total", "patrimonio_neto", "deuda_financiera", "efectivo", "activo_corriente", "pasivo_corriente",
             "caja_equivalentes", "deuda_financiera_corriente", "deuda_financiera_no_corriente")   # cifras comparables entre periodos
 ESCALAS = (1, 1_000, 1_000_000)
-_PESOS = ("peso", "pesos", "pesos argentinos", "peso argentino", "pesos argentinos (ars)", "ars", "$", "moneda nacional", "pesos (ars)", "$ (pesos)")
-_DOLARES = ("dolar", "dolares", "dolares estadounidenses", "dolar estadounidense", "dolares americanos", "dolar americano", "usd", "us$", "u$s", "u$d", "dolares (usd)", "us dollar", "us dollars", "dollars")
-
-
-def moneda_canonica(moneda) -> str:
-    """"pesos" / "dolares" para las escrituras habituales ("Pesos Argentinos", "ARS", "US$"...); cualquier otra se deja como esta (sin acentos, en minuscula).
-    Dos periodos del mismo emisor que escriben distinto la misma moneda no son un cambio de moneda."""
-    import unicodedata
-
-    t = unicodedata.normalize("NFKD", str(moneda or "")).encode("ascii", "ignore").decode().lower()
-    t = " ".join(t.replace(".", "").split())
-    return "pesos" if t in _PESOS else "dolares" if t in _DOLARES else t
 
 
 def _v(p: dict, campo: str):
