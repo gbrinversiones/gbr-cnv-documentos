@@ -238,6 +238,10 @@ jobs:
         if: always()
         continue-on-error: true
         run: python -m cnv exportar
+      - name: Series historicas por emisor para graficos (sin modelo)
+        if: always()
+        continue-on-error: true
+        run: python -m cnv series
       - name: Tiempo por paso (resumen del job)
         if: always()
         continue-on-error: true

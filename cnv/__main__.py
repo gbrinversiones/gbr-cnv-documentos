@@ -11,6 +11,7 @@
   python -m cnv escaneados                       # cuenta los PDF escaneados segun los marcadores (solo lee)
   python -m cnv ocr [--max-docs N] [--tiempo-max 7200]   # OCR de los escaneados; requiere tesseract (ver cnv/ocr.py)
   python -m cnv novedades [--dias 7] [--hoy AAAA-MM-DD]   # documentos nuevos y lo presentado en los ultimos dias (sin modelo)
+  python -m cnv series   # series historicas por emisor para graficos (ratios y cifras base; sin modelo)
   python -m cnv perfiles [--ons data/ons.csv]   # perfil de emisor en texto plantilla con datos verificados (sin modelo)
   python -m cnv eventos [--max 150] [--solo CUIT]   # eventos tipados de hechos relevantes (dividendos, emision ON, recompra, asamblea, M&A)
   python -m cnv tiempos   # tabla de tiempo por comando del job (lee el archivo de CNV_TIEMPOS)
@@ -49,6 +50,7 @@ from . import ocr
 from . import perfiles as per
 from . import ratios as rat
 from . import salud
+from . import series as ser
 from . import tiempos as tmp
 from . import universo as uni
 from . import financieros as fin
@@ -125,6 +127,7 @@ def _ejecutar(argv=None) -> int:
     ev.add_argument("--tiempo-max", type=int, default=900)
     ev.add_argument("--solo-indice", action="store_true", help="no llama al modelo: solo reconstruye cnv/indice/eventos.json.gz")
     sub.add_parser("tiempos")
+    sub.add_parser("series")
     sub.add_parser("exportar")
     ca = sub.add_parser("calidad")
     ca.add_argument("--n", type=int, default=cal.N_DEFECTO, help="tamano de la muestra (determinista)")
@@ -234,6 +237,10 @@ def _ejecutar(argv=None) -> int:
     if a.cmd == "cobertura":
         r = cob.construir(almacen, universo, cob.leer_ons(a.ons), dt.date.fromisoformat(a.hoy) if a.hoy else None)
         print("TOTAL", json.dumps(r, ensure_ascii=False))
+        return 0
+
+    if a.cmd == "series":
+        print("TOTAL", json.dumps(ser.construir(almacen, universo), ensure_ascii=False))
         return 0
 
     if a.cmd == "perfiles":
