@@ -59,6 +59,7 @@ export ANTHROPIC_API_KEY=...   # no se guarda en ningún archivo
 python -m cnv financieros --max 20 --solo 30546689979 --tiempo-max 600
 ```
 `--max` es el tope de documentos enviados al modelo por corrida (costo acotado); el workflow lo corre al final del job `indice` con `--max 150` y `continue-on-error`. Solo procesa documentos ya descargados: hay que haber corrido `python -m cnv sync --tipos estados_contables`.
+- **Completar campos desde el workflow:** la corrida manual tiene el input `completar_campos` (default `false`); con `true`, el paso `financieros` agrega `--completar-campos` y vuelve a pedir los estados ya procesados con la versión 3 o 4 del extractor para que sumen los campos nuevos. Conviene con `cupo_modelo` 3 o 4 y repetir hasta que no queden pendientes (≈ US$ 0,002 por documento).
 
 ## Novedades (`cnv/novedades.py`)
 `python -m cnv novedades [--dias 7] [--hoy AAAA-MM-DD]` escribe `cnv/indice/novedades.json` (JSON plano, sin modelo, US$ 0) con lo **presentado** en los últimos 7 días (fecha de presentación ≥ hoy − 7, inclusive): hechos relevantes agrupados por categoría y avisos de pago. Es el último paso del job `indice`.

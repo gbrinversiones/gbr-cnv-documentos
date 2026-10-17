@@ -30,6 +30,10 @@ on:
       cupo_modelo:
         description: "Multiplicador de los topes de los pasos con modelo (financieros 150, resumenes 400, clasificar 500 y sus tiempos). 1 = diario; 4 = puesta al dia del atraso"
         default: "1"
+      completar_campos:
+        description: "true = el paso financieros vuelve a pedir (gasta modelo) los estados ya procesados con una version anterior del extractor para que sumen los campos nuevos (--completar-campos). Usar con cupo_modelo 3-4 hasta vaciar los pendientes. Default false"
+        type: boolean
+        default: false
 
 concurrency:
   group: sincronizar-cnv
@@ -99,6 +103,7 @@ jobs:
     timeout-minutes: 300  # topes propios de cada paso (~120 min con cupo 1; ~330 con cupo 4 que NO entra: usar cupo <= 3); con 30 se cancelaba a mitad
     env:
       CUPO_MODELO: ${{ github.event.inputs.cupo_modelo || '1' }}
+      COMPLETAR_CAMPOS: ${{ github.event.inputs.completar_campos || 'false' }}
       GCS_BUCKET: ${{ vars.GCS_BUCKET }}
       GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
     steps:
@@ -140,7 +145,8 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: |
           K="$CUPO_MODELO"; case "$K" in 1|2|3|4) ;; *) echo "cupo_modelo debe ser 1-4"; exit 1;; esac
-          python -m cnv financieros --max $((150*K)) --tiempo-max $((1200*K))
+          extra=(); if [ "$COMPLETAR_CAMPOS" = "true" ]; then extra=(--completar-campos); fi
+          python -m cnv financieros --max $((150*K)) --tiempo-max $((1200*K)) "${extra[@]}"
       - name: Resumir hechos relevantes nuevos (Claude Haiku, max 400 por corrida)
         if: always()
         continue-on-error: true
