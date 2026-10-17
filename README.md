@@ -169,7 +169,23 @@ CNV_OCR=1 python -m cnv ocr --solo 30546689979 --max-docs 3
 - por empresa: documentos por tipo (total / con texto), fecha del último documento, **fallidos con su motivo** (`rendido` = agotó 3 intentos), documentos sin bajar, escaneados, truncados, parciales y leídos por OCR;
 - **cobertura** de resúmenes, categorías, cifras de estados contables (con el estado de cada documento: `ok`, `escaneado`, `pendiente`…) y avisos de pago estructurados;
 - **empresas silenciosas:** activas (tuvieron algún documento en los últimos 365 días) pero sin documentos nuevos hace más de `--dias-silencio` días; empresas sin ningún documento; filas del universo sin CUIT o con CUIT que no pasa el dígito verificador.
-El workflow lo escribe en el resumen del job (`python -m cnv salud >> "$GITHUB_STEP_SUMMARY"`), con `continue-on-error`. «Último documento» incluye todas las secciones que lista la CNV, no solo las que se descargan.
+El workflow lo escribe en el resumen del job (`python -m cnv salud >> "$GITHUB_STEP_SUMMARY"`), con `continue-on-error`.
+
+**Atraso, errores recurrentes y alertas (Fase 18).** El informe suma:
+- **Atraso por etapa** (`atraso`): documentos que la próxima corrida todavía tiene que procesar — `descargas` (sin bajar, con menos de 3 intentos), `financieros`, `resumenes`, `clasificar`, `avisos_pago` y `condiciones` — con las mismas reglas de cada etapa.
+- **Errores recurrentes** (`errores_recurrentes`): documentos que agotaron los 3 intentos en cualquier etapa (descarga, financieros, avisos de pago, condiciones, clasificar) y por eso ya no se reintentan solos, con empresa, documento y motivo. Las **empresas silenciosas** (activas sin documentos nuevos hace más de 60 días) ya estaban en el informe.
+- Todo va al resumen del job (`salud >> $GITHUB_STEP_SUMMARY`).
+
+`python -m cnv salud --anomalias ARCHIVO` compara el informe con la foto de la corrida anterior (`cnv/indice/salud_estado.json`, se actualiza cada vez) y escribe en `ARCHIVO` el cuerpo de un issue **solo si hay anomalías**; si no hay, borra el archivo. Las anomalías son cambios respecto de la corrida anterior, para no avisar de lo que es normal durante una carga grande:
+| Código | Cuándo |
+|---|---|
+| `descarga_detenida` | el documento más nuevo de toda la base tiene más de 7 días (única regla absoluta; no necesita foto previa) |
+| `atraso_creciente` | una etapa sube ≥ 100 documentos **y** ≥ 5 % desde la corrida anterior (un atraso grande que baja no alerta) |
+| `errores_recurrentes` | ≥ 5 documentos nuevos que agotaron sus intentos |
+| `empresas_silenciosas` | ≥ 3 empresas silenciosas más |
+| `universo_sin_cuit` / `universo_cuit_invalido` | aparecen filas del universo sin CUIT o con CUIT inválido |
+
+El paso del workflow («Alertas de salud») crea un **issue de GitHub** con la etiqueta `salud-cnv` usando el `GITHUB_TOKEN` del propio workflow (permiso `issues: write` en el job `indice`), **como máximo uno por día** (antes de crearlo busca issues con esa etiqueta creados hoy). No hay correo ni secretos: el repo es público y el issue solo lleva conteos y nombres de empresas del universo. Si hay un issue de hoy, no crea otro. «Último documento» incluye todas las secciones que lista la CNV, no solo las que se descargan.
 
 ## Control del universo (`cnv/universo.py`)
 **`--verificar` y `--sugerir` no modifican `data/universo.csv`**: generan un informe y las altas/correcciones se hacen a mano. `--sugerir-desde-byma` solo modifica los CSV con `--escribir` (ver abajo).

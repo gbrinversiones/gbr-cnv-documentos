@@ -7,6 +7,7 @@
   python -m cnv universo --sugerir NOMBRE [--sugerir OTRO ...] [--confirmar]
   python -m cnv universo --sugerir-desde-byma ons_byma.json [--escribir]   # emisores de ONs de BYMA fuera del universo; informes/emisores_por_revisar.json
   python -m cnv salud [--formato md|json] [--dias-silencio 60] [--hoy AAAA-MM-DD]   # informe de salud (solo lee)
+  python -m cnv salud --anomalias ARCHIVO   # compara con la corrida anterior; si hay anomalias escribe el cuerpo de un issue
   python -m cnv escaneados                       # cuenta los PDF escaneados segun los marcadores (solo lee)
   python -m cnv ocr [--max-docs N] [--tiempo-max 7200]   # OCR de los escaneados; requiere tesseract (ver cnv/ocr.py)
   python -m cnv novedades [--dias 7] [--hoy AAAA-MM-DD]   # documentos nuevos y lo presentado en los ultimos dias (sin modelo)
@@ -89,6 +90,7 @@ def main(argv=None) -> int:
     sa.add_argument("--formato", choices=("md", "json"), default="md")
     sa.add_argument("--dias-silencio", type=int, default=salud.DIAS_SILENCIO)
     sa.add_argument("--hoy", default=None, help="AAAA-MM-DD (para reproducir un informe)")
+    sa.add_argument("--anomalias", default=None, metavar="ARCHIVO", help="detecta anomalias contra la corrida anterior, guarda la foto actual y escribe el cuerpo del issue en ARCHIVO (sin anomalias: no lo crea)")
     sa.add_argument("--max-fallidos", type=int, default=30)
     oc = sub.add_parser("ocr")
     oc.add_argument("--max-docs", type=int, default=None, help="tope de documentos por empresa y por corrida")
@@ -152,6 +154,16 @@ def main(argv=None) -> int:
 
     if a.cmd == "salud":
         informe = salud.calcular(almacen, salud.leer_universo_completo(), dt.date.fromisoformat(a.hoy) if a.hoy else None, a.dias_silencio)
+        if a.anomalias:
+            hallazgos = salud.anomalias(informe, salud.leer_estado(almacen))
+            salud.guardar_estado(almacen, informe)
+            if os.path.exists(a.anomalias):
+                os.remove(a.anomalias)
+            if hallazgos:
+                with open(a.anomalias, "w", encoding="utf-8", newline="\n") as f:
+                    f.write(salud.a_markdown_anomalias(hallazgos, informe))
+            print("ANOMALIAS", json.dumps(hallazgos, ensure_ascii=False))
+            return 0
         print(json.dumps(informe, ensure_ascii=False, indent=1) if a.formato == "json" else salud.a_markdown(informe, a.max_fallidos))
         return 0
 

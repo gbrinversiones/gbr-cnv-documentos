@@ -157,3 +157,147 @@ def test_cli_salud_md_y_json(base, monkeypatch, capsys, tmp_path):
     assert cli.main(["salud", "--formato", "json", "--hoy", "2026-10-16", "--dias-silencio", "30"]) == 0
     datos = json.loads(capsys.readouterr().out)
     assert datos["dias_silencio"] == 30 and datos["universo_sin_cuit"] == ["SIN CUIT S.A."]
+
+
+# --- Fase 18: atraso por etapa, errores recurrentes y alertas -----------------------------------------------------
+
+from cnv import clasificacion as cla  # noqa: E402
+from cnv import condiciones as cond  # noqa: E402
+
+
+@pytest.fixture
+def operativa(tmp_path):
+    a = alm.AlmacenLocal(str(tmp_path))
+    c = VIVA["cuit"]
+    alm.guardar_indice_empresa(a, c, [
+        hecho(1, "2026-10-14", r="resumen", k="resultados", kv=cla.VERSION),      # al dia
+        hecho(2, "2026-10-13", r="resumen"),                                       # falta clasificar
+        hecho(3, "2026-10-12"),                                                    # falta resumir y clasificar
+        hecho(4, "2026-10-11", kx=3, kv=cla.VERSION),                              # clasificar agoto sus intentos: error recurrente, ya no es atraso
+        {"id": "20", "t": "estados_contables", "f": "2026-08-10", "texto_ok": True},   # procesado con la version vigente
+        {"id": "21", "t": "estados_contables", "f": "2026-05-10", "texto_ok": True},   # pendiente
+        {"id": "22", "t": "estados_contables", "f": "2026-02-10", "texto_ok": True, "ocr": 2},   # OCR: no cuenta
+        {"id": "30", "t": "prospectos", "f": "2026-05-05", "texto_ok": True},          # condiciones pendiente
+        {"id": "31", "t": "avisos_pago", "f": "2026-09-30", "texto_ok": True},         # avisos pendiente
+        {"id": "50", "t": "actas", "f": "2026-09-10", "texto_ok": False, "intentos": 0},   # sin bajar
+        {"id": "51", "t": "actas", "f": "2026-09-11", "texto_ok": False, "intentos": 1, "error": "sin adjunto"},   # sin bajar, con un intento
+        {"id": "52", "t": "actas", "f": "2026-09-12", "texto_ok": False, "intentos": 3, "error": "http 404"},     # rendido: error recurrente
+        {"id": "60", "t": "otros", "f": "2026-09-12", "texto_ok": False, "intentos": 0},   # tipo sin texto: no es atraso
+    ])
+    fin.guardar_financieros(a, c, {"periodos": [], "procesados": {"20": {"v": fin.VERSION_EXTRACTOR, "estado": "ok"}, "23": {"v": fin.VERSION_EXTRACTOR, "estado": "error", "intentos": 3, "error": "api"},
+                                                                    "24": {"v": fin.VERSION_EXTRACTOR, "estado": "error", "intentos": 2, "error": "api"}}})
+    avp.guardar_avisos(a, c, {"pagos": [], "procesados": {"99": {"v": avp.VERSION_EXTRACTOR, "estado": "error", "intentos": 3, "error": "json"}}})
+    cond.guardar_condiciones(a, c, {"emisiones": [], "procesados": {"98": {"v": cond.VERSION_EXTRACTOR, "estado": "error", "intentos": 3, "error": "json"}}})
+    return a
+
+
+def test_atraso_por_etapa(operativa):
+    assert salud.atraso(operativa, [VIVA, {"empresa": "SIN CUIT", "cuit": ""}]) == {"descargas": 2, "financieros": 1, "resumenes": 2, "clasificar": 2, "avisos_pago": 1, "condiciones": 1}
+
+
+def test_errores_recurrentes_de_todas_las_etapas(operativa):
+    r = salud.errores_recurrentes(operativa, [VIVA, {"empresa": "SIN CUIT", "cuit": ""}])
+    assert [(x["etapa"], x["doc"], x["intentos"]) for x in r] == [("avisos_pago", "99", 3), ("clasificar", "4", 3), ("condiciones", "98", 3), ("descarga", "52", 3), ("financieros", "23", 3)]
+    assert {x["motivo"] for x in r if x["etapa"] == "descarga"} == {"http 404"} and all(x["empresa"] == VIVA["empresa"] for x in r)
+
+
+def test_el_informe_incluye_atraso_y_errores_y_el_markdown_los_muestra(operativa):
+    inf = salud.calcular(operativa, [VIVA], HOY)
+    assert inf["atraso"]["clasificar"] == 2 and len(inf["errores_recurrentes"]) == 5
+    md = salud.a_markdown(inf)
+    assert "### Atraso por etapa" in md and "| financieros | 1 |" in md and "errores recurrentes (5" in md and "descarga: VIVA S.A. #52 — http 404" in md
+
+
+def informe(**k):
+    base = {"fecha": "2026-10-16", "dias_silencio": 60, "resumen": {"documentos": 100}, "empresas": [{"ultimo_documento": "2026-10-15"}], "silenciosas": [], "errores_recurrentes": [],
+            "universo_sin_cuit": [], "universo_cuit_invalido": [], "atraso": {"financieros": 1000, "resumenes": 500}}
+    base.update(k)
+    return base
+
+
+PREVIO = {"fecha": "2026-10-15", "atraso": {"financieros": 1000, "resumenes": 500}, "errores_recurrentes": 10, "silenciosas": 5, "universo_sin_cuit": 0, "universo_cuit_invalido": 0}
+
+
+def codigos(inf, previo=PREVIO):
+    return [a["codigo"] for a in salud.anomalias(inf, previo)]
+
+
+def test_una_carga_en_curso_que_baja_o_se_mantiene_no_alerta():
+    assert codigos(informe()) == [] and codigos(informe(atraso={"financieros": 400, "resumenes": 0})) == []
+    assert codigos(informe(atraso={"financieros": 1010, "resumenes": 540})) == []          # crece poco: ni 100 documentos ni 5 % (resumenes: +40)
+
+
+def test_atraso_que_crece_mucho_alerta_por_etapa():
+    a = salud.anomalias(informe(atraso={"financieros": 1200, "resumenes": 500}), PREVIO)
+    assert [(x["codigo"], x["detalle"]) for x in a] == [("atraso_creciente", "financieros: 1000 -> 1200 pendientes (+200) desde el 2026-10-15")]
+    assert codigos(informe(atraso={"financieros": 1099, "resumenes": 500})) == []           # +99: bajo el umbral
+    assert codigos(informe(atraso={"financieros": 1100, "resumenes": 500})) == ["atraso_creciente"]
+
+
+def test_errores_silenciosas_y_universo_alertan_solo_si_crecen():
+    assert codigos(informe(errores_recurrentes=[{}] * 14)) == [] and codigos(informe(errores_recurrentes=[{}] * 15)) == ["errores_recurrentes"]
+    assert codigos(informe(silenciosas=[{}] * 7)) == [] and codigos(informe(silenciosas=[{}] * 8)) == ["empresas_silenciosas"]
+    assert codigos(informe(universo_sin_cuit=["X"])) == ["universo_sin_cuit"] and codigos(informe(universo_cuit_invalido=[{}])) == ["universo_cuit_invalido"]
+    assert codigos(informe(), {**PREVIO, "universo_sin_cuit": 3}) == []                      # ya estaba: no se repite
+
+
+def test_descarga_detenida_es_absoluta_y_no_necesita_foto_previa():
+    viejo = informe(empresas=[{"ultimo_documento": "2026-10-08"}, {"ultimo_documento": "2026-09-01"}, {"ultimo_documento": None}])
+    assert codigos(viejo, None) == ["descarga_detenida"]
+    assert codigos(informe(empresas=[{"ultimo_documento": "2026-10-09"}]), None) == []        # 7 dias: todavia dentro del limite
+    assert codigos(informe(empresas=[{"ultimo_documento": None}]), None) == []                 # base vacia: nada que alertar
+    assert codigos(informe(atraso={"financieros": 99999, "resumenes": 99999}), None) == []     # primera corrida: sin foto no se compara
+
+
+def test_estado_entre_corridas(tmp_path):
+    a = alm.AlmacenLocal(str(tmp_path))
+    assert salud.leer_estado(a) is None
+    inf = informe()
+    salud.guardar_estado(a, inf)
+    primero = a.leer(salud.RUTA_ESTADO)
+    salud.guardar_estado(a, inf)
+    assert a.leer(salud.RUTA_ESTADO) == primero and salud.leer_estado(a)["atraso"] == {"financieros": 1000, "resumenes": 500}
+    a.guardar(salud.RUTA_ESTADO, b"no es json")
+    assert salud.leer_estado(a) is None
+    a.guardar(salud.RUTA_ESTADO, b'{"x": 1}')
+    assert salud.leer_estado(a) is None
+
+
+def test_cuerpo_del_issue():
+    inf = informe()
+    md = salud.a_markdown_anomalias([{"codigo": "atraso_creciente", "detalle": "financieros: 1 -> 500"}], inf)
+    assert "**atraso_creciente**: financieros: 1 -> 500" in md and "| financieros | 1000 |" in md and "como máximo una vez por día" in md
+
+
+def test_cli_anomalias_escribe_el_cuerpo_solo_si_hay_y_guarda_la_foto(operativa, monkeypatch, capsys, tmp_path):
+    monkeypatch.setenv("DATOS_LOCAL", str(tmp_path / "datos"))
+    monkeypatch.setattr(cli, "cargar_universo", lambda: [VIVA])
+    monkeypatch.setattr(salud, "leer_universo_completo", lambda: [VIVA])
+    monkeypatch.setattr(salud, "CRECIMIENTO_ERRORES", 1)
+    destino = tmp_path / "issue.md"
+    destino.write_text("viejo", encoding="utf-8")
+    almacen = alm.almacen_desde_entorno()
+    for nombre in ("cnv/indice/" + VIVA["cuit"] + ".json",):
+        almacen.guardar(nombre, operativa.leer(nombre))
+    # primera corrida: sin foto previa, sin descarga detenida (ultimo documento reciente): no hay issue y se borra el cuerpo viejo
+    assert cli.main(["salud", "--anomalias", str(destino), "--hoy", "2026-10-16"]) == 0
+    assert "ANOMALIAS []" in capsys.readouterr().out and not destino.exists() and salud.leer_estado(almacen) is not None
+    # segunda corrida con mas errores recurrentes que la foto: hay issue
+    estado = salud.leer_estado(almacen)
+    almacen.guardar(salud.RUTA_ESTADO, json.dumps({**estado, "errores_recurrentes": 1}).encode("utf-8"))
+    assert cli.main(["salud", "--anomalias", str(destino), "--hoy", "2026-10-16"]) == 0
+    assert "errores_recurrentes" in capsys.readouterr().out and "1 -> 2" in destino.read_text(encoding="utf-8")
+    # tercera corrida igual: la foto ya tiene el nuevo valor, no vuelve a alertar
+    assert cli.main(["salud", "--anomalias", str(destino), "--hoy", "2026-10-16"]) == 0
+    assert "ANOMALIAS []" in capsys.readouterr().out and not destino.exists()
+
+
+def test_el_workflow_crea_un_issue_por_dia_como_maximo():
+    """Sin PyYAML (no esta en requirements): se revisa el texto del paso."""
+    texto = open(".github/workflows/sincronizar.yml", encoding="utf-8").read()
+    job = texto[texto.index("\n  indice:"):]
+    assert "issues: write" in job.split("steps:")[0]
+    paso = job[job.index("- name: Alertas de salud"):]
+    paso = paso[:paso.index("\n      - name:", 10)]
+    assert "if: always()" in paso and "continue-on-error: true" in paso and "GH_TOKEN: ${{ github.token }}" in paso
+    assert "python -m cnv salud --anomalias" in paso and "created:>=$hoy" in paso and "gh issue create" in paso and 'if [ "$ya" = "0" ]' in paso
