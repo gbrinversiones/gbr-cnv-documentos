@@ -5,6 +5,7 @@
   python -m cnv financieros [--max 150] [--solo CUIT] [--tiempo-max 1200]
   python -m cnv universo --verificar [--salida informe.json] [--tiempo-max 1800] [--refrescar]   # no modifica el CSV
   python -m cnv universo --sugerir NOMBRE [--sugerir OTRO ...] [--confirmar]
+  python -m cnv universo --sugerir-desde-byma ons_byma.json [--escribir]   # emisores de ONs de BYMA fuera del universo; informes/emisores_por_revisar.json
   python -m cnv salud [--formato md|json] [--dias-silencio 60] [--hoy AAAA-MM-DD]   # informe de salud (solo lee)
   python -m cnv escaneados                       # cuenta los PDF escaneados segun los marcadores (solo lee)
   python -m cnv ocr [--max-docs N] [--tiempo-max 7200]   # OCR de los escaneados; requiere tesseract (ver cnv/ocr.py)
@@ -32,6 +33,7 @@ from . import avisos_pago as avp
 from . import busqueda as bus
 from . import clasificacion as cla
 from . import cobertura as cob
+from . import emisores_byma as eby
 from . import exportar as exp
 from . import condiciones as cond
 from . import escaneados as esc
@@ -73,6 +75,9 @@ def main(argv=None) -> int:
     un = sub.add_parser("universo")
     un.add_argument("--verificar", action="store_true", help="confirma cada CUIT contra la pagina de la CNV y reporta discrepancias")
     un.add_argument("--sugerir", action="append", default=[], metavar="NOMBRE", help="lista candidatos del autocompletado de la CNV (se puede repetir)")
+    un.add_argument("--sugerir-desde-byma", default=None, metavar="ons_byma.json", help="emisores de ONs del payload de BYMA que no estan en el universo: busca su CUIT en la CNV (solo coincidencia exacta)")
+    un.add_argument("--ons", default="data/ons.csv", help="con --sugerir-desde-byma: CSV de ONs")
+    un.add_argument("--escribir", action="store_true", help="con --sugerir-desde-byma: agrega lo confirmado a data/universo.csv y data/ons.csv (si no, solo informa)")
     un.add_argument("--confirmar", action="store_true", help="con --sugerir: abre la pagina de cada candidato para confirmar su razon social")
     un.add_argument("--salida", default=None, help="archivo JSON del informe (tambien sirve de avance para retomar)")
     un.add_argument("--tiempo-max", type=int, default=1800)
@@ -115,10 +120,18 @@ def main(argv=None) -> int:
     a = p.parse_args(argv)
 
     if a.cmd == "universo":  # no usa el almacen: solo el CSV y la CNV
-        if not a.verificar and not a.sugerir:
-            print("indicar --verificar o --sugerir NOMBRE")
+        if not a.verificar and not a.sugerir and not a.sugerir_desde_byma:
+            print("indicar --verificar, --sugerir NOMBRE o --sugerir-desde-byma ons_byma.json")
             return 2
         completo = salud.leer_universo_completo()
+        if a.sugerir_desde_byma:
+            plan = eby.planificar(eby.leer_byma(a.sugerir_desde_byma), completo, eby.leer_ons_csv(a.ons), hasta_t=time.monotonic() + a.tiempo_max)
+            eby.escribir_informe(plan, os.path.basename(a.sugerir_desde_byma))
+            print(eby.a_markdown(plan))
+            if a.escribir:
+                print("CSV actualizados:", eby.escribir_csv(plan, "data/universo.csv", a.ons))
+            if not (a.verificar or a.sugerir):
+                return 0
         if a.verificar:
             informe = uni.verificar(completo, ruta_avance=a.salida, hasta_t=time.monotonic() + a.tiempo_max, refrescar=a.refrescar)
             print(uni.a_markdown_verificacion(informe))

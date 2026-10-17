@@ -169,7 +169,7 @@ CNV_OCR=1 python -m cnv ocr --solo 30546689979 --max-docs 3
 El workflow lo escribe en el resumen del job (`python -m cnv salud >> "$GITHUB_STEP_SUMMARY"`), con `continue-on-error`. «Último documento» incluye todas las secciones que lista la CNV, no solo las que se descargan.
 
 ## Control del universo (`cnv/universo.py`)
-**No modifica `data/universo.csv`**: genera un informe y las altas/correcciones se hacen a mano.
+**`--verificar` y `--sugerir` no modifican `data/universo.csv`**: generan un informe y las altas/correcciones se hacen a mano. `--sugerir-desde-byma` solo modifica los CSV con `--escribir` (ver abajo).
 ```
 python -m cnv universo --verificar --salida informes/universo.json     # confirma cada CUIT contra la CNV
 python -m cnv universo --sugerir "Transportadora de Gas del Sur" --sugerir "Oiltanking" --sugerir "Puentes" --sugerir "Vaca Muerta Oil Sur" --sugerir "C&C Medicals"
@@ -178,6 +178,17 @@ python -m cnv universo --sugerir "Edesa" --confirmar                   # abre la
 - **`--verificar`:** abre la página pública de cada empresa (`Empresas/Empresa/{cuit}?fdesde=01/01/2016`; con una ventana reciente y sin presentaciones la CNV muestra «No se encontrarón resultados» en vez de la razón social) y compara la razón social del marcador «Resultados de búsqueda:» con la del CSV (sin acentos, mayúsculas, sufijos societarios ni alias entre paréntesis; `Cia.`=Compañía, `Hnos.`=Hermanos, `Imp.`/`Exp.`=Importadora/Exportadora). Veredictos: `coincide`, `revisar_nombre_parcial`, `razon_social_distinta`, `cuit_no_existe_en_cnv` (la CNV muestra la portada genérica), `sin_razon_social_legible`, `cuit_invalido` (dígito verificador; no gasta consulta), `sin_cuit`, `error_de_red`; más CUIT y nombres duplicados. Reintentos con espera creciente, tope de tiempo y avance en `--salida` (reanudable; los `error_de_red` se reintentan).
 - **`--sugerir NOMBRE`:** consulta el autocompletado público (`Empresas/Autocomplete?term=`) con el nombre completo y versiones más cortas, lista los candidatos con CUIT, parecido, validez del CUIT y si ya están en el CSV.
 - Se puede correr desde GitHub (*Actions → Verificar universo CNV*): el informe queda en el resumen del job y como artefacto.
+
+### Ampliar el universo con los emisores de ONs de BYMA (`cnv/emisores_byma.py`)
+```
+python -m cnv universo --sugerir-desde-byma ons_byma.json            # informa y escribe informes/emisores_por_revisar.json; los CSV no se tocan
+python -m cnv universo --sugerir-desde-byma ons_byma.json --escribir # ademas agrega lo CONFIRMADO al final de data/universo.csv y data/ons.csv
+```
+`ons_byma.json` es el payload del tablero de BYMA que publica `gbr-inversiones-assets` (se leen solo `ticker`, `emisor` y `fecha_vencimiento`; precios y tasas no se usan). Hoy tiene ~190 ONs de ~70 emisores, y la gran mayoría de los tickers no están en `data/ons.csv`.
+- **Por emisor:** si su razón social normalizada (`clave`: sin acentos, abreviaturas expandidas, sin la forma societaria del final: S.A., S.A.C.I.F.I.A.…) es **idéntica** a la de una fila de `universo.csv`, solo se suman sus tickers faltantes a `ons.csv` (`fuente_cuit = universo_exacto_byma`). «Holding», «Grupo» o «Argentina» **no** se ignoran: EDESA S.A. y EDESA HOLDING S.A. son empresas distintas.
+- **Emisor nuevo:** se busca en el autocompletado de la CNV (nombre completo y versiones más cortas). El CUIT se acepta **solo si** (1) exactamente un CUIT tiene una razón social idéntica (misma `clave`), (2) el dígito verificador es válido y (3) la página de la CNV de ese CUIT muestra también una razón social idéntica. Entra con la razón social que figura en la CNV (`origen = BYMA-ON`, `fuente_cuit = cnv_autocompletado_exacto`). Si el CUIT ya estaba en `universo.csv` con otro nombre, solo se suman las ONs.
+- **Lo dudoso nunca va al CSV:** sin coincidencia exacta (`sin_coincidencia_exacta_en_autocompletado`), dos CUIT con la misma razón (`varias_coincidencias_exactas`, caso EDESA), una página que no confirma (`pagina_cnv_no_confirma`), CUIT inválido, o la CNV caída (`cnv_no_responde`) → `informes/emisores_por_revisar.json` (determinista, sin fechas) con los candidatos. Ahí caen los 4 casos que quedaban sin CUIT (Puentes Hnos, Vaca Muerta Oil Sur, C&C Medicals y Edesa) si la CNV no da coincidencia exacta; con coincidencia exacta entran solos.
+- **Aprobación:** agregar una fila a `universo.csv` hace que la sincronización empiece a bajar sus documentos (costo en descarga y en modelo). Por eso el workflow *Verificar universo CNV* (`desde_byma` + `abrir_pr`) escribe los CSV en una **rama y abre un pull request**: nada entra a `master`, ni a la sincronización, hasta que una persona lo mergea. Con `desde_byma` sin `abrir_pr` solo informa. La CNV no es alcanzable desde el entorno de desarrollo; se corre desde GitHub Actions.
 
 ## Índice de búsqueda de texto completo (`cnv/busqueda.py`)
 Para encontrar documentos por lo que dicen y no solo por el título. `python -m cnv busqueda [--tiempo-max 1500]` reconstruye **todo** (idempotente: mismos bytes si el corpus no cambió, y no vuelve a subir lo que no cambió). Lee el texto de los documentos con `texto_ok` de tipo `hechos`, `prospectos`, `avisos_pago` y `actas` (no estados contables), solo los primeros 20.000 caracteres (sin las marcas `[pagina N]`).
