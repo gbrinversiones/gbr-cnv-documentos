@@ -503,20 +503,27 @@ def test_un_pedido_mas_grande_que_todo_el_presupuesto_pasa_cuando_la_ventana_est
     assert espera == pytest.approx(60.0)
 
 
-def test_el_presupuesto_se_comparte_entre_hilos_y_no_se_pasa(monkeypatch):
+def test_el_presupuesto_se_comparte_entre_hilos_y_no_se_pasa():
+    from collections import deque
+
+    reservas = []
+
+    class Registro(deque):                           # anota el instante de cada reserva TAL COMO lo toma el presupuesto (bajo su cerrojo), no el del hilo que sigue
+        def append(self, x):
+            reservas.append(x)
+            super().append(x)
+
     p = conc.Presupuesto(1000, ventana=0.2)          # ventana corta real para no esperar de verdad
-    registrados, cerrojo = [], threading.Lock()
+    p.usos = Registro()
 
     def trabajar(e, m):
         p.esperar(400)
-        with cerrojo:
-            registrados.append(time.monotonic())
         return conc.Res(m["id"])
 
     r, conf = correr(docs(8), trabajar, n=4)
-    assert len(conf) == 8 and p.esperas > 0
-    for t0 in registrados:                           # en cualquier ventana de 0,2 s hay a lo sumo 2 pedidos de 400 (800 <= 1000)
-        assert sum(1 for t in registrados if t0 <= t < t0 + 0.2) <= 2
+    assert len(conf) == 8 and len(reservas) == 8 and p.esperas > 0
+    for t0, _ in reservas:                           # en cualquier ventana de 0,2 s hay a lo sumo 2 reservas de 400 (800 <= 1000)
+        assert sum(n for t, n in reservas if t0 <= t < t0 + 0.2) <= 1000
 
 
 def test_crear_mensaje_reserva_los_tokens_estimados_antes_de_llamar(monkeypatch):
