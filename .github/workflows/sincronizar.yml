@@ -148,3 +148,7 @@ jobs:
         if: always()
         continue-on-error: true
         run: python -m cnv novedades
+      - name: Exportables CSV para analistas (sin modelo)
+        if: always()
+        continue-on-error: true
+        run: python -m cnv exportar

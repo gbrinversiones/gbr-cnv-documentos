@@ -72,6 +72,13 @@ python -m cnv financieros --max 20 --solo 30546689979 --tiempo-max 600
 - **Huecos** (avisos accionables, no errores): `sin_documentos`, `sin_estados_contables`, `estados_contables_sin_cifras`, `estado_contable_desactualizado` (cierre de hace más de 200 días), `sin_prospectos` y `sin_avisos_de_pago` (solo si el emisor tiene ONs), `avisos_de_pago_sin_estructurar`, `documentos_fallidos`, `documentos_sin_bajar`, `sin_actividad_reciente` (más de 120 días). `ons_sin_emisor`: ONs cuyo CUIT falta (`sin_cuit_en_ons_csv`) o cuyo emisor no está en el universo (`emisor_fuera_del_universo`, o sea que no se están bajando sus documentos).
 - Depende de la fecha (`al`) para los huecos por antigüedad, así que el archivo puede cambiar de un día para otro aunque no haya documentos nuevos; no se vuelve a escribir si el contenido es igual.
 
+## Exportables CSV (`cnv/exportar.py`)
+`python -m cnv exportar` escribe en `cnv/export/` tablas planas para analistas (Excel, pandas, BI), sin modelo y sin red (US$ 0). Es el último paso del job `indice`. Formato: UTF-8 **con BOM**, separador coma, fin de línea `\n`, fechas `AAAA-MM-DD`; **campo vacío = dato no disponible o no verificado** (nunca cero ni estimado), listas unidas con `;`, números tal cual figuran en el documento (la `escala` de financieros dice la unidad).
+- `financieros.csv`: una fila por emisor/periodo/tipo de balance con las 12 cifras, los 6 ratios (`ratios_sin_calcular` explica los vacíos), `doc` de origen y `cifras_sospechosas` (las que marcó la auditoría salen **vacías**, igual que en los ratios).
+- `condiciones.csv` (una fila por emisión, con `ticker` si se vinculó), `avisos_pago.csv` (un pago por fila), `hechos.csv` (`fecha, cuit, emisor, categoria, titulo, resumen, url, doc, texto_ok`; los no clasificados con categoría vacía) y `cobertura.csv` (una fila por empresa del universo).
+- `diccionario.md`: columnas y significado de cada archivo, **generado desde las mismas listas de columnas** que los CSV (un test exige que no haya columnas sin describir).
+- Deterministas: filas ordenadas, mismos bytes si los datos no cambian, y un archivo igual no se vuelve a subir. Condiciones, avisos y cobertura se leen de sus índices (`cnv/indice/*.json.gz`): si todavía no existen, el CSV queda con solo el encabezado. `cobertura.csv` cambia de un día a otro solo si cambian los huecos por antigüedad.
+
 ## Auditoría de cifras (`cnv/auditoria.py`)
 Una cifra puede estar bien respaldada por su cita y aun así estar mal (otra fila, la columna comparativa, una escala mal declarada). `python -m cnv auditar-cifras` (sin modelo, US$ 0) cruza las cifras de `cnv/financieros` entre sí y escribe `cnv/indice/auditoria_cifras.json.gz`; corre en el job `indice` **antes** de `ratios`.
 | Regla | Qué detecta | Cifras marcadas |
@@ -183,6 +190,9 @@ Texto UTF-8 comprimido del documento. Cada página es un bloque `[pagina N]\n<te
 
 ### `cnv/texto/{cuit}/{doc_id}.ocr.txt.gz`
 Solo para avisos de pago que son un formulario sin valores en el texto: la lectura por OCR (300 dpi) con los números de baja confianza reemplazados por `[ilegible]`. El texto original no se toca.
+
+### `cnv/export/*.csv` y `cnv/export/diccionario.md`
+Exportables para analistas; ver «Exportables CSV» y el diccionario de columnas en el propio bucket.
 
 ### `cnv/indice/{cuit}.json` — lista de documentos de la empresa
 | Campo | Significado |
