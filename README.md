@@ -15,6 +15,7 @@ Descarga los documentos **públicos** que las empresas argentinas presentan en l
 - `python -m cnv clasificar`: asigna una categoría cerrada (`k`) a cada hecho relevante (ver abajo).
 - `python -m cnv novedades`: documentos nuevos entre corridas y lo presentado en los últimos 7 días, para la landing (sin modelo; ver abajo).
 - `python -m cnv cobertura`: cruza emisores y ONs con documentos y datos verificados; lista los huecos (sin modelo; ver abajo).
+- `python -m cnv condiciones`: condiciones de emisión de las ON desde prospectos, suplementos y avisos (ver abajo).
 - `python -m cnv ratios`: ratios por emisor y periodo desde las cifras verificadas (sin modelo; ver abajo).
 - `python -m cnv avisos-pago`: estructura los avisos de pago de ONs ya descargados (ver abajo).
 - El workflow `Sincronizar documentos CNV` corre todos los días (y se puede disparar a mano para cargas grandes).
@@ -69,6 +70,20 @@ python -m cnv financieros --max 20 --solo 30546689979 --tiempo-max 600
 - **Formato:** `{"version":1,"al":"AAAA-MM-DD","huecos_definicion":{...},"resumen":{...},"emisores":[...],"ons_sin_emisor":[...]}`. Cada emisor (todas las empresas del universo, por nombre): `cuit`, `empresa`, `ons` (`ticker`, `vence`, `ultimo_pago` = última fecha de pago estructurada para ese ticker), `documentos` (por tipo: `total`, `con_texto`, `ultimo`), `ultimo_estado_contable` (`doc`, `periodo`, `tipo`, `balance`, `fecha_presentacion`, `cifras`; solo con cifras verificadas), `ultimo_aviso_pago` (el último estructurado, o el último documento con `estructurado: false`) y `huecos`.
 - **Huecos** (avisos accionables, no errores): `sin_documentos`, `sin_estados_contables`, `estados_contables_sin_cifras`, `estado_contable_desactualizado` (cierre de hace más de 200 días), `sin_prospectos` y `sin_avisos_de_pago` (solo si el emisor tiene ONs), `avisos_de_pago_sin_estructurar`, `documentos_fallidos`, `documentos_sin_bajar`, `sin_actividad_reciente` (más de 120 días). `ons_sin_emisor`: ONs cuyo CUIT falta (`sin_cuit_en_ons_csv`) o cuyo emisor no está en el universo (`emisor_fuera_del_universo`, o sea que no se están bajando sus documentos).
 - Depende de la fecha (`al`) para los huecos por antigüedad, así que el archivo puede cambiar de un día para otro aunque no haya documentos nuevos; no se vuelve a escribir si el contenido es igual.
+
+## Condiciones de emisión de las ON (`cnv/condiciones.py`)
+De cada documento de tipo `prospectos` con texto (prospecto, suplemento, aviso de suscripción o de resultado; `tipo_documento` sale de la sección de la CNV) saca, por clase/serie, con `claude-haiku-5-5` (esquema JSON, `thinking` apagado) y la **misma regla de cita literal verificada** que `financieros`:
+`clase`, `moneda` (`pesos`/`dolares`/`uva`/`dolar_linked`), `monto_maximo`, `monto_adjudicado`, `tasa_tipo` (`fija`/`variable`/`mixta`/`cupon_cero`), `tasa_valor`, `tasa_margen`, `tasa_referencia`, `fecha_emision`, `fecha_vencimiento`, `frecuencia_intereses` (`mensual`/`trimestral`/`semestral`/`anual`/`al_vencimiento`), `fechas_pago_intereses`, `amortizacion_tipo` (`bullet`/`cuotas`), `amortizacion_fechas`, `rescate_anticipado`, `garantia`, `ley_aplicable` y `calificacion`.
+- **Verdad:** un dato se publica solo si su cita (3–50 palabras) está literal en el texto del documento y el dato está respaldado por la cita: **números** (montos, tasas) tal cual impresos y enteros dentro de la cita (con `%` en las tasas); **fechas** en alguno de sus formatos dentro de la cita; **categorías** con palabras de la cita que las justifican (p. ej. «nominal anual» **no** respalda una frecuencia anual); **textos** como fragmento copiado literal de la cita. Una emisión sin ningún dato clave (vencimiento, emisión, tasa o monto) no se publica. Lo descartado queda con su motivo en `procesados[doc].descartados`. Un documento leído por OCR no se usa.
+- **Recorte y costo:** se manda la portada más las páginas con más palabras clave (términos y condiciones, tasa, vencimiento…) hasta 40.000 caracteres; ≈ US$ 0,002 por documento (estimado). `--max 100` por corrida (workflow: job `indice`, `continue-on-error`). Idempotente (versión del extractor, 3 reintentos de error, guardado tras cada documento).
+- **Salidas:** `cnv/condiciones/{cuit}.json` (`emisiones[]` con `doc`, `n`, `tipo_documento`, `campos{campo: {valor, cita, pagina, (texto, ambiguo, moneda_en_cita)}}`; y `procesados`) y `cnv/indice/condiciones.json.gz` = `{"version":1,"filas":[...],"ons":{ticker:{...}}}`: una fila plana por emisión (sin citas; con `ticker` si calza con exactamente una ON y `tickers` si calza con varias) y, por ticker de `data/ons.csv`, las condiciones **consolidadas**.
+- **Vínculo ticker → condiciones:** solo por CUIT del emisor + **fecha de vencimiento verificada** igual a la de la ON; sin fecha respaldada en el documento no hay vínculo (no se adivina por nombre ni por clase). Si hay varios documentos de la misma emisión, por campo manda el suplemento (el monto adjudicado, el aviso de resultado); `fuentes` dice de qué documento y página salió cada valor y `conflictos` lista los campos en que otro documento dice algo distinto.
+- **Diferencia con `rf_terminos.json`** (repo `portfolio-manager`, `newsletter/terminos_on.py`): aquel sale solo del **Aviso de Resultados**, deja un texto libre resumido por ticker (`tasa_interes`, `pago_intereses`, `amortizacion`…), se asocia a la ON por emisor y fecha de emisión y se publica en el repo de assets. Este sale del **prospecto, suplemento y avisos de suscripción/resultado**, con campos **tipados** (números, fechas ISO, categorías) y citas por campo, y queda en la base pública de la CNV. No se reemplazan: `rf_terminos.json` sigue sirviendo mientras la base no cubra una ON; el campo `fuentes` permite contrastar ambos.
+```
+export ANTHROPIC_API_KEY=...
+python -m cnv condiciones --max 20 --solo 30546689979     # gasta modelo
+python -m cnv condiciones --solo-indice                   # solo reconstruye el índice (US$ 0)
+```
 
 ## Ratios por emisor (`cnv/ratios.py`)
 `python -m cnv ratios` calcula, por emisor y periodo, a partir de las cifras **ya verificadas** de `cnv/financieros/{cuit}.json` (no usa el modelo, cuesta US$ 0) y escribe `cnv/indice/ratios.json.gz`.
@@ -190,6 +205,9 @@ Una fila por empresa/periodo/tipo/acumulado/balance: `cuit, empresa, periodo, ti
 
 ### `cnv/indice/novedades.json` y `cnv/indice/vistos.json`
 Ver «Novedades». `vistos.json` es estado interno entre corridas (no lo lee la landing).
+### `cnv/condiciones/{cuit}.json` y `cnv/indice/condiciones.json.gz`
+Ver «Condiciones de emisión de las ON».
+
 ### `cnv/indice/cobertura.json.gz`
 Ver «Cobertura por emisor y ON».
 
@@ -219,6 +237,7 @@ Modelo: `claude-haiku-5-5`, **US$ 0,10 por millón de tokens de entrada y US$ 0,
 | Resumen (`resumenes`) | hecho relevante | ≈ 1.400 tokens (hasta 4.000 caracteres + instrucciones) | ≈ 70 (máx. 300) | ≈ US$ 0,00018 | ≈ US$ 0,18 |
 | Categoría (`clasificar`) | hecho relevante | ≈ 2.200 (hasta 6.000 caracteres + instrucciones) | ≈ 40; un 2.º pedido si la cita no figura | ≈ US$ 0,00024 (≈ 0,0003 con reintentos) | ≈ US$ 0,25–0,35 |
 | Cifras (`financieros`) | estado contable | ≈ 16.000 (recorte de hasta 43.000 caracteres) | ≈ 800 (máx. 4.096) | ≈ US$ 0,002 (máx. ≈ 0,004) | ≈ US$ 2–4 |
+| Condiciones de emisión (`condiciones`) | prospecto / suplemento / aviso | ≈ 12.000 (recorte de hasta 40.000 caracteres) | ≈ 1.200 (máx. 6.000) | ≈ US$ 0,002 (máx. ≈ 0,005) | ≈ US$ 2–5 |
 | Avisos de pago (`avisos-pago`) | aviso con datos | ≈ 2.000 (hasta 20.000 caracteres ≈ 7.000) | ≈ 350 | ≈ US$ 0,0004 (máx. ≈ 0,001) | ≈ US$ 0,4–1 |
 | Avisos de pago, formulario | formulario sin valores | — | — | **US$ 0** el aviso sin OCR; el OCR es CPU, no modelo | 0 |
 | Búsqueda (`busqueda`), OCR, salud, universo | — | — | — | **US$ 0** (sin modelo) | 0 |
