@@ -31,3 +31,12 @@ def test_la_concurrencia_se_configura_desde_el_workflow():
     assert "CNV_CONCURRENCIA: ${{ github.event.inputs.concurrencia || '4' }}" in t
     job = t[t.index("\n  indice:"):]
     assert job.index("CNV_CONCURRENCIA") < job.index("steps:")          # esta en el env del job: lo ven todos los pasos con modelo
+
+
+def test_series_es_un_paso_final_del_job_indice_sin_modelo():
+    t = workflow()
+    job = t[t.index("\n  indice:"):]
+    paso = job[job.index("- name: Series historicas"):]
+    paso = paso[:paso.index("\n      - name:", 10)]
+    assert "python -m cnv series" in paso and "ANTHROPIC_API_KEY" not in paso and "if: always()" in paso and "continue-on-error: true" in paso
+    assert job.index("python -m cnv exportar") < job.index("python -m cnv series") < job.index("python -m cnv tiempos")
