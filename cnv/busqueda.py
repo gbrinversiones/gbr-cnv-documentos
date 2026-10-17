@@ -22,6 +22,7 @@ corte a mitad de la publicacion deja el indice anterior consistente. Si se agota
 import array
 import datetime as dt
 import gzip
+import hashlib
 import io
 import json
 import math
@@ -122,9 +123,34 @@ def _contar(almacen, cuit: str, doc_id: str):
     return (len(tokens), Counter(tokens)) if tokens else None
 
 
-def construir(almacen, empresas: list, hasta_t: float | None = None, trabajadores: int = 8, ahora: dt.datetime | None = None, lote: int = 256) -> dict:
+RUTA_HUELLA = "cnv/busqueda/huella.json"
+
+
+def huella_corpus(almacen, empresas: list) -> str:
+    """Huella de TODO lo que determina el indice: version, parametros, stopwords y, de cada documento indexable, su identidad y los datos del indice por empresa que
+    describen su texto (paginas, caracteres, truncado, OCR). Cambian los textos / las reglas -> cambia la huella; cambian solo el resumen o la categoria (`r`, `k`),
+    que no entran al indice de busqueda -> no. Lee los indices por empresa (barato frente a reconstruir)."""
+    h = hashlib.sha1()
+    h.update(json.dumps([VERSION, SHARDS, TIPOS_INDEXADOS, MAX_CARACTERES, MIN_TOKEN, MAX_TOKEN, TF_MAX, DF_MIN, DF_MAX_PORCENTAJE, sorted(STOPWORDS)], separators=(",", ":")).encode("utf-8"))
+    for e in empresas:
+        for m in sorted(alm.leer_indice_empresa(almacen, e["cuit"]), key=lambda m: int(m["id"])):
+            if m.get("texto_ok") and m.get("t") in TIPOS_INDEXADOS:
+                h.update(json.dumps([e["cuit"], m["id"], m.get("t"), m.get("n"), m.get("p"), m.get("trunc"), m.get("ocr"), m.get("parcial")], separators=(",", ":"), ensure_ascii=False).encode("utf-8"))
+    return h.hexdigest()
+
+
+def construir(almacen, empresas: list, hasta_t: float | None = None, trabajadores: int = 8, ahora: dt.datetime | None = None, lote: int = 256, forzar: bool = False) -> dict:
     """Reconstruye el indice completo. Devuelve {"estado": "ok"|"sin_tiempo", "n_docs", "terminos", "escritos", ...}.
-    Con "sin_tiempo" no se escribe NADA (el indice anterior sigue valiendo)."""
+    Con "sin_tiempo" no se escribe NADA (el indice anterior sigue valiendo). Si la huella del corpus (`huella_corpus`) es la de la ultima construccion y el indice existe,
+    no hace nada y devuelve {"estado": "ok", "sin_cambios": True, "n_docs"}; `forzar=True` reconstruye igual."""
+    huella = huella_corpus(almacen, empresas)
+    if not forzar and almacen.leer("cnv/busqueda/meta.json"):
+        previa = almacen.leer(RUTA_HUELLA)
+        try:
+            if previa and json.loads(previa).get("huella") == huella:
+                return {"estado": "ok", "sin_cambios": True, "n_docs": json.loads(almacen.leer("cnv/busqueda/meta.json")).get("n_docs")}
+        except ValueError:
+            pass
     docs_ids = documentos_indexables(almacen, empresas)
     docs, postings = [], {}
     with ThreadPoolExecutor(max_workers=trabajadores) as pool:
@@ -157,6 +183,7 @@ def construir(almacen, empresas: list, hasta_t: float | None = None, trabajadore
     if {k: v for k, v in previo.items() if k != "generado"} == {k: v for k, v in meta.items() if k != "generado"}:
         meta["generado"] = previo.get("generado", meta["generado"])  # nada cambio: tampoco cambia la fecha (idempotente)
     escritos += _publicar(almacen, "cnv/busqueda/meta.json", json.dumps(meta, separators=(",", ":")).encode("utf-8"))  # al final: es la marca de "indice completo"
+    _publicar(almacen, RUTA_HUELLA, json.dumps({"huella": huella}, separators=(",", ":")).encode("utf-8"))      # no es parte del contrato con el lector (Node no lo lee)
     return {"estado": "ok", "n_docs": n, "terminos": sum(len(s) for s in shards), "avgdl": avgdl, "escritos": escritos}
 
 
