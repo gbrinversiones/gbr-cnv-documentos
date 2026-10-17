@@ -71,9 +71,13 @@ def _div(num: float, den: float, nombre_den: str) -> tuple:
     return round(num / den, 6), None
 
 
-def calcular_ratio(nombre: str, insumos: dict) -> tuple:
-    """(valor | None, motivo | None, derivados). `insumos`: {campo: contexto(...)}; los campos que falten no estan en el dict."""
+def calcular_ratio(nombre: str, insumos: dict, sospechosas=frozenset()) -> tuple:
+    """(valor | None, motivo | None, derivados). `insumos`: {campo: contexto(...)}; los campos que falten no estan en el dict.
+    `sospechosas`: cifras que la auditoria (cnv/auditoria.py) marco como inconsistentes: un ratio que las usa queda null (`cifra_sospechosa`)."""
     campos = ENTRADAS[nombre]
+    malas = [c for c in campos if c in sospechosas]
+    if malas:
+        return None, "cifra_sospechosa:" + ",".join(malas), {}
     faltan = [c for c in campos if c not in insumos]
     if faltan:
         return None, "falta_cifra:" + ",".join(faltan), {}
@@ -107,25 +111,29 @@ def calcular_ratio(nombre: str, insumos: dict) -> tuple:
     return r, m, {"ebitda": ebitda}
 
 
-def ratios_de_periodo(p: dict) -> dict:
+def ratios_de_periodo(p: dict, sospechosas=frozenset()) -> dict:
     """Fila de un periodo de financieros: insumos, derivados, ratios y motivos de los que no se pudieron calcular."""
     insumos = {c: contexto(p, c) for c in {x for e in ENTRADAS.values() for x in e}}
     insumos = {c: i for c, i in insumos.items() if i}
     ratios, motivos, derivados = {}, {}, {}
     for nombre in ENTRADAS:
-        valor, motivo, deriv = calcular_ratio(nombre, insumos)
+        valor, motivo, deriv = calcular_ratio(nombre, insumos, sospechosas)
         ratios[nombre] = valor
         derivados.update(deriv)
         if valor is None:
             motivos[nombre] = motivo
-    usados = sorted({c for n in ENTRADAS for c in ENTRADAS[n] if c in insumos})
-    return {
+    usados = sorted({c for n in ENTRADAS for c in ENTRADAS[n] if c in insumos and c not in sospechosas})
+    fila = {
         "periodo": p.get("periodo"), "tipo": p.get("tipo"), "acumulado": p.get("acumulado"), "balance": p.get("balance", "desconocido"),
         "moneda": p.get("moneda"), "unidad": p.get("unidad"), "escala": p.get("escala"), "doc": p.get("doc"),
         "periodo_verificado": p.get("periodo_verificado"), "balance_coherente": p.get("balance_coherente"),
         "insumos": {c: {"valor": insumos[c]["valor"], "pagina": insumos[c]["pagina"]} for c in usados},
         "derivados": derivados, "ratios": ratios, "motivos": motivos,
     }
+    malas = sorted(c for c in sospechosas if c in insumos)
+    if malas:
+        fila["sospechosas"] = malas      # cifras presentes pero marcadas por la auditoria: no se usaron
+    return fila
 
 
 def periodos_vigentes(periodos: list) -> list:
@@ -142,12 +150,15 @@ def construir(almacen, empresas: list) -> dict:
     """Escribe cnv/indice/ratios.json.gz. Devuelve conteos: periodos, ratios calculados por nombre y motivos de los null."""
     import json
 
+    from .auditoria import leer_sospechosas
+
+    auditadas = leer_sospechosas(almacen)
     emisores, stats = {}, {"emisores": 0, "periodos": 0, "calculados": {n: 0 for n in ENTRADAS}, "motivos": {}}
     for e in empresas:
         periodos = periodos_vigentes(leer_financieros(almacen, e["cuit"])["periodos"])
         if not periodos:
             continue
-        filas = [ratios_de_periodo(p) for p in periodos]
+        filas = [ratios_de_periodo(p, auditadas.get(e["cuit"], {}).get(p["doc"], frozenset())) for p in periodos]
         emisores[e["cuit"]] = {"empresa": e["empresa"], "periodos": filas}
         stats["emisores"] += 1
         stats["periodos"] += len(filas)
@@ -158,6 +169,6 @@ def construir(almacen, empresas: list) -> dict:
                     stats["motivos"][m] = stats["motivos"].get(m, 0) + 1
                 else:
                     stats["calculados"][n] += 1
-    salida = {"version": VERSION, "formulas": FORMULAS, "emisores": emisores}
+    salida = {"version": VERSION, "formulas": FORMULAS, "auditoria_cifras": bool(auditadas), "emisores": emisores}
     alm.guardar_si_cambio(almacen, "cnv/indice/ratios.json.gz", alm.comprimir(json.dumps(salida, ensure_ascii=False, separators=(",", ":")).encode("utf-8")))
     return stats
