@@ -31,8 +31,11 @@ on:
         description: "Multiplicador de los topes de los pasos con modelo (financieros 150, resumenes 400, clasificar 500 y sus tiempos). 1 = diario; 4 = puesta al dia del atraso"
         default: "1"
       concurrencia:
-        description: "Llamadas al modelo en paralelo en los pasos con modelo (1-6; defecto 4). Con 1 es el comportamiento secuencial de siempre. Baja sola si la API da limites de tasa sostenidos"
-        default: "4"
+        description: "Llamadas al modelo en paralelo en los pasos con modelo (1-6; defecto 2 mientras la clave se comparta con el chatbot de produccion). Con 1 es el comportamiento secuencial de siempre. Baja sola si la API da limites de tasa sostenidos"
+        default: "2"
+      tpm:
+        description: "Tokens de ENTRADA por minuto que el pipeline puede gastar (CNV_TPM; defecto 150000 = ~30% del limite de 500000 de la cuenta, el resto queda para produccion)"
+        default: "150000"
       completar_campos:
         description: "true = el paso financieros vuelve a pedir (gasta modelo) los estados ya procesados con una version anterior del extractor para que sumen los campos nuevos (--completar-campos). Usar con cupo_modelo 3-4 hasta vaciar los pendientes. Default false"
         type: boolean
@@ -107,7 +110,8 @@ jobs:
     env:
       CUPO_MODELO: ${{ github.event.inputs.cupo_modelo || '1' }}
       COMPLETAR_CAMPOS: ${{ github.event.inputs.completar_campos || 'false' }}
-      CNV_CONCURRENCIA: ${{ github.event.inputs.concurrencia || '4' }}
+      CNV_CONCURRENCIA: ${{ github.event.inputs.concurrencia || '2' }}
+      CNV_TPM: ${{ github.event.inputs.tpm || '150000' }}
       GCS_BUCKET: ${{ vars.GCS_BUCKET }}
       GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
     steps:

@@ -27,8 +27,9 @@ def test_sin_el_input_el_comando_no_lleva_el_flag():
 
 def test_la_concurrencia_se_configura_desde_el_workflow():
     t = workflow()
-    assert "concurrencia:" in t and 'default: "4"' in t.split("concurrencia:")[1][:500]
-    assert "CNV_CONCURRENCIA: ${{ github.event.inputs.concurrencia || '4' }}" in t
+    assert "concurrencia:" in t and 'default: "2"' in t.split("concurrencia:")[1][:500]          # 2 mientras la clave se comparta con produccion
+    assert "CNV_CONCURRENCIA: ${{ github.event.inputs.concurrencia || '2' }}" in t
+    assert "tpm:" in t and 'default: "150000"' in t.split("  tpm:")[1][:500] and "CNV_TPM: ${{ github.event.inputs.tpm || '150000' }}" in t
     job = t[t.index("\n  indice:"):]
     assert job.index("CNV_CONCURRENCIA") < job.index("steps:")          # esta en el env del job: lo ven todos los pasos con modelo
 

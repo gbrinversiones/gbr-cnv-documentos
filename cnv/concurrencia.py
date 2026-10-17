@@ -9,7 +9,10 @@ Reparto de tareas:
   - un hilo que falla con un error inesperado no pierde a los demas: ese documento queda pendiente para la proxima corrida;
   - ante 429 / 5xx / «overloaded» se reintenta con espera creciente respetando el header `retry-after`; si los limites de tasa se repiten, la concurrencia
     baja sola (y vuelve a subir de a uno cuando la API se normaliza).
-Concurrencia: CNV_CONCURRENCIA (defecto 4, minimo 1, maximo 6). Con 1 todo corre en el hilo principal, sin pool, exactamente como el bucle secuencial anterior.
+Presupuesto de tokens por minuto (CNV_TPM): la clave de la API se COMPARTE con el chatbot de produccion, asi que el pipeline no puede agotar el limite de la
+cuenta. Antes de cada pedido se reservan los tokens de entrada estimados (caracteres / 3) en una ventana movil de 60 s y, si no entran, se espera (proactivo; el
+limitador de 429 de arriba es solo la red de seguridad, reactiva).
+Concurrencia: CNV_CONCURRENCIA (defecto 2, minimo 1, maximo 6). Con 1 todo corre en el hilo principal, sin pool, exactamente como el bucle secuencial anterior.
 """
 import os
 import random
@@ -18,7 +21,10 @@ import time
 from collections import deque
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 
-DEFECTO, MAXIMO = 4, 6
+DEFECTO, MAXIMO = 2, 6              # 2 por defecto mientras la clave se comparta con el chatbot de produccion
+TPM_DEFECTO = 150_000              # tokens de ENTRADA por minuto: ~30 % del limite de 500.000 de la cuenta; el resto queda libre para produccion
+VENTANA_TPM = 60.0
+CARACTERES_POR_TOKEN = 3           # estimacion conservadora (el espanol da ~3,5-4): se reserva de mas, nunca de menos
 INTENTOS_API = 5                 # llamadas a la API por pedido (1 + 4 reintentos)
 ESPERA_MAXIMA = 120.0            # segundos: tope de lo que se espera por un retry-after
 ESCRITURA = threading.Lock()     # una sola escritura al almacen a la vez
@@ -34,6 +40,77 @@ def hilos() -> int:
     except ValueError:
         n = DEFECTO
     return max(1, min(MAXIMO, n))
+
+
+def tpm() -> int:
+    """CNV_TPM: tokens de entrada por minuto que el pipeline puede gastar. Un valor no numerico o menor o igual a cero vale el defecto (no se puede apagar)."""
+    try:
+        n = int(os.environ.get("CNV_TPM", TPM_DEFECTO))
+    except ValueError:
+        return TPM_DEFECTO
+    return n if n > 0 else TPM_DEFECTO
+
+
+def estimar_tokens(kw: dict) -> int:
+    """Tokens de entrada de un pedido a `messages.create`: caracteres del sistema y de los mensajes / CARACTERES_POR_TOKEN, redondeado hacia arriba."""
+    texto = str(kw.get("system") or "")
+    for m in kw.get("messages") or []:
+        c = m.get("content") if isinstance(m, dict) else None
+        texto += c if isinstance(c, str) else str(c or "")
+    return max(1, -(-len(texto) // CARACTERES_POR_TOKEN))
+
+
+class Presupuesto:
+    """Ventana movil de `limite` tokens por `ventana` segundos, compartida por todos los hilos. `esperar(n)` reserva `n` tokens y duerme hasta que entren.
+    Un pedido mas grande que todo el presupuesto se deja pasar cuando la ventana esta vacia (si no, esperaria para siempre)."""
+
+    def __init__(self, limite: int, reloj=time.monotonic, dormir=None, ventana: float = VENTANA_TPM):
+        self.limite, self.reloj, self.ventana = limite, reloj, ventana
+        self.dormir = dormir or time.sleep
+        self.usos = deque()                     # (instante, tokens)
+        self.esperado, self.esperas, self._ultimo_aviso = 0.0, 0, None
+        self._cerrojo = threading.Lock()
+
+    def _purgar(self, ahora: float) -> int:
+        while self.usos and ahora - self.usos[0][0] >= self.ventana:
+            self.usos.popleft()
+        return sum(t for _, t in self.usos)
+
+    def usado(self) -> int:
+        with self._cerrojo:
+            return self._purgar(self.reloj())
+
+    def esperar(self, tokens: int) -> float:
+        """Reserva `tokens`; devuelve cuantos segundos se esperaron."""
+        total_espera = 0.0
+        while True:
+            with self._cerrojo:
+                ahora = self.reloj()
+                usado = self._purgar(ahora)
+                if usado + tokens <= self.limite or not self.usos:
+                    self.usos.append((ahora, tokens))
+                    return total_espera
+                espera = max(0.05, self.usos[0][0] + self.ventana - ahora)
+                self.esperas += 1
+                self.esperado += espera
+                if self._ultimo_aviso is None or ahora - self._ultimo_aviso >= 30:
+                    self._ultimo_aviso = ahora
+                    print(f"  presupuesto de tokens ({self.limite}/min): esperando {espera:.0f} s para no ocupar la cuenta compartida con produccion", flush=True)
+            self.dormir(espera)
+            total_espera += espera
+
+
+_presupuesto: Presupuesto | None = None
+_cerrojo_presupuesto = threading.Lock()
+
+
+def presupuesto() -> Presupuesto:
+    """El presupuesto del proceso, creado la primera vez con CNV_TPM (todos los hilos comparten el mismo)."""
+    global _presupuesto
+    with _cerrojo_presupuesto:
+        if _presupuesto is None:
+            _presupuesto = Presupuesto(tpm())
+        return _presupuesto
 
 
 # ---------------------------------------------------------------------------
@@ -123,8 +200,15 @@ def con_reintentos(fn, intentos: int = INTENTOS_API, dormir=None, limitador: Lim
 
 
 def crear_mensaje(cliente, **kw):
-    """`cliente.messages.create(**kw)` con reintentos. Es el unico punto por el que pasan las llamadas al modelo."""
-    return con_reintentos(lambda: cliente.messages.create(**kw))
+    """`cliente.messages.create(**kw)` con presupuesto de tokens por minuto y reintentos. Es el unico punto por el que pasan las llamadas al modelo.
+    Cada intento (tambien los reintentos) reserva sus tokens estimados antes de salir."""
+    tokens = estimar_tokens(kw)
+
+    def llamar():
+        presupuesto().esperar(tokens)
+        return cliente.messages.create(**kw)
+
+    return con_reintentos(llamar)
 
 
 # ---------------------------------------------------------------------------

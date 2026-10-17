@@ -25,7 +25,7 @@ OTRA = {"empresa": "OTRA S.A.", "cuit": "30500010912"}
 
 # --- configuracion ---------------------------------------------------------------------------
 
-@pytest.mark.parametrize("valor,esperado", [(None, 4), ("1", 1), ("6", 6), ("9", 6), ("0", 1), ("-3", 1), ("abc", 4), ("", 4), ("3", 3)])
+@pytest.mark.parametrize("valor,esperado", [(None, 2), ("1", 1), ("6", 6), ("9", 6), ("0", 1), ("-3", 1), ("abc", 2), ("", 2), ("3", 3), ("4", 4)])
 def test_hilos_por_variable_de_entorno(monkeypatch, valor, esperado):
     monkeypatch.delenv("CNV_CONCURRENCIA", raising=False)
     if valor is not None:
@@ -435,3 +435,126 @@ def test_los_clientes_de_la_api_se_crean_sin_reintentos_propios(tmp_path, monkey
     for cmd in (["resumenes"], ["clasificar"], ["eventos"], ["avisos-pago"], ["condiciones"], ["financieros"]):
         assert cli.main(cmd) == 0, cmd
     assert len(creados) == 6 and all(k.get("max_retries") == 0 and "timeout" in k for k in creados)
+
+
+# --- presupuesto proactivo de tokens por minuto (CNV_TPM) -----------------------------------------
+
+class RelojFalso:
+    def __init__(self):
+        self.t, self.dormido = 1000.0, []
+
+    def __call__(self):
+        return self.t
+
+    def dormir(self, s):
+        self.dormido.append(s)
+        self.t += s
+
+
+def presupuesto_falso(limite):
+    r = RelojFalso()
+    return conc.Presupuesto(limite, reloj=r, dormir=r.dormir), r
+
+
+@pytest.mark.parametrize("valor,esperado", [(None, 150_000), ("100000", 100_000), ("abc", 150_000), ("0", 150_000), ("-5", 150_000), ("", 150_000)])
+def test_tpm_por_variable_de_entorno(monkeypatch, valor, esperado):
+    monkeypatch.delenv("CNV_TPM", raising=False)
+    if valor is not None:
+        monkeypatch.setenv("CNV_TPM", valor)
+    assert conc.tpm() == esperado
+
+
+def test_estimacion_de_tokens_es_caracteres_sobre_3_redondeado_hacia_arriba():
+    assert conc.estimar_tokens({"system": "a" * 30, "messages": [{"role": "user", "content": "b" * 60}]}) == 30
+    assert conc.estimar_tokens({"system": "a", "messages": [{"role": "user", "content": "b"}]}) == 1                # 2 caracteres -> 1 token, no 0
+    assert conc.estimar_tokens({"system": "a" * 10, "messages": [{"role": "user", "content": "b" * 10}]}) == 7        # 20 / 3 = 6,67 -> 7
+    assert conc.estimar_tokens({}) == 1 and conc.estimar_tokens({"messages": [{"content": [{"type": "text"}]}]}) >= 1
+
+
+def test_el_presupuesto_deja_pasar_lo_que_entra_sin_esperar():
+    p, r = presupuesto_falso(1000)
+    assert p.esperar(400) == 0 and p.esperar(600) == 0 and r.dormido == [] and p.usado() == 1000
+
+
+def test_el_presupuesto_espera_hasta_que_salga_lo_viejo_de_la_ventana():
+    p, r = presupuesto_falso(1000)
+    p.esperar(600)                                  # t = 1000
+    r.t += 20
+    p.esperar(400)                                  # t = 1020: llenan los 1000
+    espera = p.esperar(500)                         # no entra: tiene que salir lo de t = 1000 (a los 60 s)
+    assert espera == pytest.approx(40.0) and r.t == pytest.approx(1060.0) and p.usado() == 900          # 400 (t = 1020) + 500 (t = 1060)
+    assert p.esperas == 1 and p.esperado == pytest.approx(40.0)
+
+
+def test_el_acumulado_de_cualquier_ventana_de_60_s_nunca_supera_el_limite():
+    p, r = presupuesto_falso(1000)
+    eventos = []
+    for n in (300, 700, 450, 450, 100, 900, 250, 250, 250, 250, 600, 600):
+        p.esperar(n)
+        eventos.append((r.t, n))
+    for i, (t0, _) in enumerate(eventos):
+        assert sum(n for t, n in eventos if t0 <= t < t0 + 60) <= 1000, i
+
+
+def test_un_pedido_mas_grande_que_todo_el_presupuesto_pasa_cuando_la_ventana_esta_vacia():
+    p, r = presupuesto_falso(1000)
+    assert p.esperar(5000) == 0                      # ventana vacia: pasa (si no, esperaria para siempre)
+    espera = p.esperar(10)                           # pero ocupa la ventana: el siguiente espera a que se libere
+    assert espera == pytest.approx(60.0)
+
+
+def test_el_presupuesto_se_comparte_entre_hilos_y_no_se_pasa(monkeypatch):
+    p = conc.Presupuesto(1000, ventana=0.2)          # ventana corta real para no esperar de verdad
+    registrados, cerrojo = [], threading.Lock()
+
+    def trabajar(e, m):
+        p.esperar(400)
+        with cerrojo:
+            registrados.append(time.monotonic())
+        return conc.Res(m["id"])
+
+    r, conf = correr(docs(8), trabajar, n=4)
+    assert len(conf) == 8 and p.esperas > 0
+    for t0 in registrados:                           # en cualquier ventana de 0,2 s hay a lo sumo 2 pedidos de 400 (800 <= 1000)
+        assert sum(1 for t in registrados if t0 <= t < t0 + 0.2) <= 2
+
+
+def test_crear_mensaje_reserva_los_tokens_estimados_antes_de_llamar(monkeypatch):
+    p, r = presupuesto_falso(100)
+    monkeypatch.setattr(conc, "_presupuesto", p)
+    eventos = []
+    cliente = SimpleNamespace(messages=SimpleNamespace(create=lambda **kw: eventos.append(("llamada", r.t)) or "ok"))
+    kw = dict(model="m", system="s" * 150, messages=[{"role": "user", "content": "u" * 150}])        # 300 caracteres = 100 tokens: llena la ventana
+    conc.crear_mensaje(cliente, **kw)
+    conc.crear_mensaje(cliente, **kw)
+    assert [t for _, t in eventos] == [1000.0, 1060.0]          # el segundo pedido espero a que la ventana se liberara
+
+
+def test_cada_reintento_vuelve_a_reservar_tokens(monkeypatch):
+    p, r = presupuesto_falso(100)
+    monkeypatch.setattr(conc, "_presupuesto", p)
+    monkeypatch.setattr(conc.time, "sleep", lambda s: None)
+    llamadas = []
+
+    def crear(**kw):
+        llamadas.append(r.t)
+        if len(llamadas) == 1:
+            raise ErrorApi(429, retry_after="0")
+        return "ok"
+
+    conc.crear_mensaje(SimpleNamespace(messages=SimpleNamespace(create=crear)), system="s" * 300)          # 100 tokens por intento
+    assert llamadas == [1000.0, 1060.0]
+
+
+def test_el_presupuesto_del_proceso_toma_cnv_tpm(monkeypatch):
+    monkeypatch.setattr(conc, "_presupuesto", None)
+    monkeypatch.setenv("CNV_TPM", "12345")
+    assert conc.presupuesto().limite == 12345 and conc.presupuesto() is conc.presupuesto()
+
+
+def test_el_modulo_con_modelo_pasa_por_el_presupuesto(tmp_path, monkeypatch):
+    p, r = presupuesto_falso(10 ** 9)
+    monkeypatch.setattr(conc, "_presupuesto", p)
+    a = montar_hechos(tmp_path, n=3)
+    res.ejecutar(a, [EMP], ClienteRapido(lambda c: "Resumen.", 0), 100, n_hilos=1)
+    assert p.usado() > 0 and len(p.usos) == 3                    # tres pedidos reservaron tokens
