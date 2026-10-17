@@ -113,6 +113,8 @@ jobs:
           python-version: "3.12"
           cache: pip
       - run: pip install -r requirements.txt
+      - name: Anotar el tiempo de cada comando (se resume al final)
+        run: echo "CNV_TIEMPOS=$RUNNER_TEMP/tiempos.tsv" >> "$GITHUB_ENV"
       - name: Reconstruir el indice global
         run: python -m cnv indice
       # Orden: primero lo barato y sin modelo (con lo que ya hay en el bucket: nunca queda sin correr aunque otro paso se corte), despues los
@@ -232,3 +234,7 @@ jobs:
         if: always()
         continue-on-error: true
         run: python -m cnv exportar
+      - name: Tiempo por paso (resumen del job)
+        if: always()
+        continue-on-error: true
+        run: python -m cnv tiempos >> "$GITHUB_STEP_SUMMARY"

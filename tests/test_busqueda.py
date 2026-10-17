@@ -200,14 +200,25 @@ def test_idempotente_mismos_bytes_y_sin_reescribir(base):
     bus.construir(a, universo, ahora=AHORA)
     nombres = ["cnv/busqueda/meta.json", "cnv/busqueda/docs.json.gz"] + [bus.nombre_shard(k) for k in range(64)]
     antes = {n: a.leer(n) for n in nombres}
-    r = bus.construir(a, universo, ahora=AHORA + dt.timedelta(days=1))
+    r = bus.construir(a, universo, ahora=AHORA + dt.timedelta(days=1), forzar=True)      # forzado: reconstruye y aun asi no reescribe nada
     assert r["escritos"] == 0 and {n: a.leer(n) for n in nombres} == antes        # ni siquiera cambia la fecha "generado"
+    assert bus.construir(a, universo, ahora=AHORA + dt.timedelta(days=1)) == {"estado": "ok", "sin_cambios": True, "n_docs": 20}      # y sin forzar ni lo intenta
+
+
+def editar_texto(a, cuit, doc, texto):
+    """Como el flujo real: al bajar de nuevo un documento cambian el texto Y los datos del indice por empresa (`n`, `p`)."""
+    alm.guardar_texto(a, cuit, doc, texto)
+    ind = alm.leer_indice_empresa(a, cuit)
+    for m in ind:
+        if m["id"] == doc:
+            m["n"] = len(texto)
+    alm.guardar_indice_empresa(a, cuit, ind)
 
 
 def test_si_cambia_el_corpus_se_reescribe_y_se_actualiza_la_fecha(base):
     a, universo = base
     bus.construir(a, universo, ahora=AHORA)
-    alm.guardar_texto(a, "30111111112", "101", "[pagina 1]\ntexto completamente distinto recompra obligaciones")
+    editar_texto(a, "30111111112", "101", "[pagina 1]\ntexto completamente distinto recompra obligaciones")
     r = bus.construir(a, universo, ahora=AHORA + dt.timedelta(days=1))
     assert r["escritos"] > 0 and json.loads(a.leer("cnv/busqueda/meta.json"))["generado"] == "2026-10-17T12:00:00Z"
 
@@ -220,7 +231,7 @@ def test_sin_tiempo_no_escribe_nada_y_deja_el_indice_anterior(base):
     a, universo = base
     bus.construir(a, universo, ahora=AHORA)
     antes = a.leer("cnv/busqueda/meta.json"), a.leer("cnv/busqueda/docs.json.gz")
-    alm.guardar_texto(a, "30111111112", "101", "[pagina 1]\notro texto recompra obligaciones")
+    editar_texto(a, "30111111112", "101", "[pagina 1]\notro texto recompra obligaciones")
     r = bus.construir(a, universo, hasta_t=1.0, ahora=AHORA)
     assert r["estado"] == "sin_tiempo" and (a.leer("cnv/busqueda/meta.json"), a.leer("cnv/busqueda/docs.json.gz")) == antes
 
@@ -292,4 +303,55 @@ def test_cli_busqueda(base, monkeypatch, capsys, tmp_path):
     monkeypatch.setenv("DATOS_LOCAL", str(a.raiz))
     monkeypatch.setattr(cli, "cargar_universo", lambda: universo)
     assert cli.main(["busqueda"]) == 0 and "'estado': 'ok'" in capsys.readouterr().out
-    assert cli.main(["busqueda", "--tiempo-max", "-1"]) == 3 and "sin tiempo" in capsys.readouterr().out
+    assert cli.main(["busqueda", "--tiempo-max", "-1"]) == 0 and "sin_cambios" in capsys.readouterr().out      # nada cambio: no necesita tiempo
+    assert cli.main(["busqueda", "--tiempo-max", "-1", "--forzar"]) == 3 and "sin tiempo" in capsys.readouterr().out
+
+
+# --- Fase 23: huella del corpus ---------------------------------------------------------------
+
+def test_la_huella_no_cambia_si_solo_cambian_el_resumen_o_la_categoria(base):
+    a, universo = base
+    antes = bus.huella_corpus(a, universo)
+    ind = alm.leer_indice_empresa(a, "30111111112")
+    for m in ind:
+        m["r"], m["k"], m["kv"] = "un resumen nuevo", "dividendos", "2"
+    alm.guardar_indice_empresa(a, "30111111112", ind)
+    assert bus.huella_corpus(a, universo) == antes
+
+
+@pytest.mark.parametrize("cambio", [{"n": 99999}, {"p": 77}, {"trunc": {"motivo": "paginas"}}, {"ocr": 3}, {"parcial": 1}, {"texto_ok": False}, {"t": "otros"}])
+def test_la_huella_cambia_si_cambia_lo_que_describe_el_texto(base, cambio):
+    a, universo = base
+    antes = bus.huella_corpus(a, universo)
+    ind = alm.leer_indice_empresa(a, "30111111112")
+    ind[0].update(cambio)
+    alm.guardar_indice_empresa(a, "30111111112", ind)
+    assert bus.huella_corpus(a, universo) != antes
+
+
+def test_la_huella_cambia_si_cambian_las_reglas_de_tokenizacion(base, monkeypatch):
+    a, universo = base
+    antes = bus.huella_corpus(a, universo)
+    monkeypatch.setattr(bus, "STOPWORDS", bus.STOPWORDS | {"palabranueva"})
+    assert bus.huella_corpus(a, universo) != antes
+    monkeypatch.setattr(bus, "STOPWORDS", frozenset(bus.STOPWORDS - {"palabranueva"}))
+    monkeypatch.setattr(bus, "MAX_CARACTERES", 100)
+    assert bus.huella_corpus(a, universo) != antes
+
+
+def test_sin_huella_guardada_o_ilegible_reconstruye(base):
+    a, universo = base
+    bus.construir(a, universo, ahora=AHORA)
+    a.guardar(bus.RUTA_HUELLA, b"no es json")
+    assert bus.construir(a, universo, ahora=AHORA).get("sin_cambios") is None
+    assert json.loads(a.leer(bus.RUTA_HUELLA))["huella"] == bus.huella_corpus(a, universo)      # y la deja bien guardada
+    a2 = alm.AlmacenLocal(a.raiz + "_otra")
+    corpus_20(a2)
+    assert bus.construir(a2, universo, ahora=AHORA).get("estado") == "ok"          # primera vez: construye aunque no haya huella
+
+
+def test_sin_meta_no_se_saltea_aunque_la_huella_coincida(base):
+    a, universo = base
+    bus.construir(a, universo, ahora=AHORA)
+    os.remove(os.path.join(a.raiz, "cnv", "busqueda", "meta.json"))
+    assert bus.construir(a, universo, ahora=AHORA).get("sin_cambios") is None and a.existe("cnv/busqueda/meta.json")
