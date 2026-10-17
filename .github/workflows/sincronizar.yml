@@ -27,6 +27,9 @@ on:
       tiempo_max:
         description: "Segundos maximos por fragmento"
         default: "18000"
+      cupo_modelo:
+        description: "Multiplicador de los topes de los pasos con modelo (financieros 150, resumenes 400, clasificar 500 y sus tiempos). 1 = diario; 4 = puesta al dia del atraso"
+        default: "1"
 
 concurrency:
   group: sincronizar-cnv
@@ -90,8 +93,9 @@ jobs:
     needs: [descargar, ocr]
     if: always()
     runs-on: ubuntu-latest
-    timeout-minutes: 170  # suma de los topes propios de cada paso (~120 min) con margen; con 30 el job se cancelaba a mitad de camino
+    timeout-minutes: 300  # topes propios de cada paso (~120 min con cupo 1; ~330 con cupo 4 que NO entra: usar cupo <= 3); con 30 se cancelaba a mitad
     env:
+      CUPO_MODELO: ${{ github.event.inputs.cupo_modelo || '1' }}
       GCS_BUCKET: ${{ vars.GCS_BUCKET }}
       GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
     steps:
@@ -131,19 +135,25 @@ jobs:
         continue-on-error: true
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-        run: python -m cnv financieros --max 150 --tiempo-max 1200
+        run: |
+          K="$CUPO_MODELO"; case "$K" in 1|2|3|4) ;; *) echo "cupo_modelo debe ser 1-4"; exit 1;; esac
+          python -m cnv financieros --max $((150*K)) --tiempo-max $((1200*K))
       - name: Resumir hechos relevantes nuevos (Claude Haiku, max 400 por corrida)
         if: always()
         continue-on-error: true
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-        run: python -m cnv resumenes --max 400 --tiempo-max 1500
+        run: |
+          K="$CUPO_MODELO"; case "$K" in 1|2|3|4) ;; *) echo "cupo_modelo debe ser 1-4"; exit 1;; esac
+          python -m cnv resumenes --max $((400*K)) --tiempo-max $((1500*K))
       - name: Clasificar hechos relevantes (Claude Haiku, max 500 por corrida)
         if: always()
         continue-on-error: true
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-        run: python -m cnv clasificar --max 500 --tiempo-max 900
+        run: |
+          K="$CUPO_MODELO"; case "$K" in 1|2|3|4) ;; *) echo "cupo_modelo debe ser 1-4"; exit 1;; esac
+          python -m cnv clasificar --max $((500*K)) --tiempo-max $((900*K))
       - name: Estructurar avisos de pago de ONs (Claude Haiku, max 200 por corrida)
         if: always()
         continue-on-error: true
