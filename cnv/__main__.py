@@ -143,6 +143,8 @@ def _ejecutar(argv=None) -> int:
     ap.add_argument("--solo", default=None, help="CUIT: procesa solo esa empresa")
     ap.add_argument("--tiempo-max", type=int, default=900)
     ap.add_argument("--contar-formularios", action="store_true", help="solo lee: cuenta los avisos de pago que son formularios sin valores y como quedaron")
+    rt = sub.add_parser("reintentos")
+    rt.add_argument("--reset", action="store_true", help="devuelve a pendiente los documentos marcados con error de API/cuenta (saldo, clave, limites de tasa); no toca errores de contenido")
     a = p.parse_args(argv)
 
     if a.cmd == "universo":  # no usa el almacen: solo el CSV y la CNV
@@ -216,6 +218,16 @@ def _ejecutar(argv=None) -> int:
                 print(f"  {e['empresa']}: {f['leidos']} formularios de aviso de pago leidos por OCR, {f['sin_texto']} sin valores legibles", flush=True)
         print("TOTAL", total)
         print(f"indice global: {construir_indice_global(almacen, universo)} documentos")
+        return 0
+
+    if a.cmd == "reintentos":
+        if not a.reset:
+            print("indicar --reset")
+            return 2
+        from . import reintentos
+
+        cuenta = reintentos.resetear(almacen, universo)
+        print(reintentos.a_texto(cuenta))
         return 0
 
     if a.cmd == "resumenes":

@@ -415,7 +415,7 @@ def test_un_error_del_modelo_en_un_documento_no_frena_a_los_demas_en_paralelo(tm
     class Cliente(ClienteRapido):
         def _crear(self, **kw):
             if id_de(kw["messages"][0]["content"]) == 105:
-                raise ErrorApi(401)
+                raise ErrorApi(404)
             return super()._crear(**kw)
 
     a = montar_hechos(tmp_path)

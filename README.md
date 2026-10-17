@@ -40,6 +40,20 @@ python -m cnv sync --desde 2023-01-01 --tipos avisos_pago,actas
 ```
 El job diario trae los últimos 30 días de los cinco tipos; no hace falta tocarlo después de la carga histórica.
 
+## Se acabó el saldo (errores de cuenta/API)
+
+Un error de la **cuenta** (HTTP 400 «credit balance is too low», 401, 402, 403, o un 429/529 que aguanta los 5 reintentos) **no es culpa del documento**: el paso
+imprime `API sin credito/clave invalida: paso detenido, 0 documentos marcados`, no anota ningún intento, termina con exit 0 y el job sigue con los pasos sin
+modelo. Aplica a los seis pasos con modelo (financieros, resumenes, clasificar, eventos, condiciones, avisos-pago) vía `concurrencia.es_error_de_cuenta`.
+Los errores de contenido (JSON inválido, cita no verificada) siguen contando intentos (máx. 3).
+
+Runbook:
+1. Deshabilitar el workflow si hace falta (`gh workflow disable sincronizar.yml`) y cargar saldo / corregir la clave `ANTHROPIC_API_KEY`.
+2. Reparar los marcadores que una corrida anterior ensució: `python -m cnv reintentos --reset` (o el input `resetear_errores_api=true` del workflow). Borra solo
+   los marcadores `error` cuyo mensaje es de API/cuenta (credit balance, authentication, permission, rate limit, overloaded, 429/529, connection); los errores
+   de contenido quedan intactos. Imprime cuántos reseteó por paso; es idempotente.
+3. Rehabilitar (`gh workflow enable sincronizar.yml`) y, si hay atraso, correr con `cupo_modelo` 2-4.
+
 ## Almacenamiento
 Todo cuelga de `cnv/` en el bucket. Detalle campo por campo en el [diccionario de datos](#diccionario-de-datos-bucket):
 `cnv/texto/{cuit}/{doc_id}.txt.gz` · `cnv/texto/{cuit}/{doc_id}.ocr.txt.gz` · `cnv/indice/{cuit}.json` · `cnv/indice/global.json.gz` · `cnv/financieros/{cuit}.json` · `cnv/indice/financieros.json.gz` · `cnv/avisos_pago/{cuit}.json` · `cnv/indice/avisos_pago.json.gz` · `cnv/busqueda/{docs.json.gz, meta.json, s00..s63.json.gz}`

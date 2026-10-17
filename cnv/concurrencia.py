@@ -131,6 +131,26 @@ def es_limite_de_tasa(error: Exception) -> bool:
     return _estado_http(error) in (429, 529) or type(error).__name__ in NOMBRES_LIMITE or "overloaded" in str(error).lower()
 
 
+MARCAS_CUENTA = ("credit balance", "authentication", "permission", "invalid x-api-key", "invalid api key", "billing")
+NOMBRES_CUENTA = {"AuthenticationError", "PermissionDeniedError"}
+AVISO_CUENTA = "API sin credito/clave invalida: paso detenido, 0 documentos marcados"
+
+
+class ErrorDeCuenta(Exception):
+    """Error de la CUENTA o de la API (saldo, clave, permisos, limite sostenido), no del documento: no cuenta intento y aborta el paso."""
+
+
+def es_error_de_cuenta(error: Exception) -> bool:
+    """HTTP 400 con «credit balance is too low», 401, 402, 403 (clave invalida, sin saldo, sin permiso) o un limite de tasa que sobrevivio a todos los
+    reintentos (ErrorDeCuenta). Un 400 por otro motivo, un JSON invalido o una cita no verificada son errores del documento: NO entran aca."""
+    if isinstance(error, ErrorDeCuenta):
+        return True
+    estado = _estado_http(error)
+    if estado in (401, 402, 403) or type(error).__name__ in NOMBRES_CUENTA:
+        return True
+    return estado == 400 and any(m in str(error).lower() for m in MARCAS_CUENTA)
+
+
 def espera_para(error: Exception, intento: int, azar=random.random) -> float:
     """Segundos a esperar antes del reintento `intento` (0 = el primero): el header `retry-after` si la API lo mando (tope ESPERA_MAXIMA), si no 2^intento + azar."""
     cabeceras = getattr(getattr(error, "response", None), "headers", None)
@@ -208,7 +228,12 @@ def crear_mensaje(cliente, **kw):
         presupuesto().esperar(tokens)
         return cliente.messages.create(**kw)
 
-    return con_reintentos(llamar)
+    try:
+        return con_reintentos(llamar)
+    except Exception as error:
+        if es_limite_de_tasa(error):                 # 429 / 529 que aguanto todos los reintentos: sostenido, es de la cuenta y no del documento
+            raise ErrorDeCuenta(f"limite de tasa sostenido tras {INTENTOS_API} intentos: {type(error).__name__}") from error
+        raise
 
 
 # ---------------------------------------------------------------------------
@@ -221,6 +246,10 @@ class Res:
 
     def __init__(self, datos, llamo: bool = True):
         self.datos, self.llamo = datos, llamo
+
+
+def avisar_cuenta(error: Exception) -> None:
+    print(f"  {AVISO_CUENTA} ({type(error).__name__}: {str(error)[:120]})", flush=True)
 
 
 def ejecutar_lote(pend: list, trabajar, confirmar, max_llamadas: int, hasta_t: float | None = None, n_hilos: int | None = None,
@@ -246,7 +275,13 @@ def ejecutar_lote(pend: list, trabajar, confirmar, max_llamadas: int, hasta_t: f
                 return {"corte": "max", "indice": i, "llamadas": llamadas}
             if vencido():
                 return {"corte": "tiempo", "indice": i, "llamadas": llamadas}
-            res = trabajar(e, m)
+            try:
+                res = trabajar(e, m)
+            except Exception as error:
+                if not es_error_de_cuenta(error):
+                    raise
+                avisar_cuenta(error)
+                return {"corte": "cuenta", "indice": i, "llamadas": llamadas}
             if res is None:
                 continue
             confirmar(e, m, res)
@@ -282,6 +317,11 @@ def ejecutar_lote(pend: list, trabajar, confirmar, max_llamadas: int, hasta_t: f
                 try:
                     res = futuro.result()
                 except Exception as error:     # un fallo inesperado de UN hilo no pierde a los demas
+                    if es_error_de_cuenta(error):
+                        if corte != "cuenta":
+                            avisar_cuenta(error)
+                        corte, indice = "cuenta", siguiente        # no se envia nada mas; los que ya vuelan se confirman o descartan normalmente
+                        continue
                     if al_fallar:
                         al_fallar(e, m, error)
                     else:
