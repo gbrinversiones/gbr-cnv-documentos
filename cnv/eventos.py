@@ -18,6 +18,7 @@ import json
 import time
 
 from . import almacen as alm
+from . import concurrencia as conc
 from .avisos_pago import _es_porcentaje, _moneda_de_cita, _token_en
 from .condiciones import ENUMS, PALABRAS, _fecha_valida
 from .financieros import a_numero, candidatos_numero, dividir_paginas, normalizar, periodo_en_texto
@@ -264,38 +265,40 @@ def candidatos(almacen, empresas: list) -> list:
     return salida
 
 
-def ejecutar(almacen, empresas: list, cliente, max_docs: int = 150, hasta_t: float | None = None) -> dict:
-    """Procesa hasta `max_docs` hechos pendientes (el tope cuenta documentos enviados al modelo). Guarda tras cada documento."""
+def ejecutar(almacen, empresas: list, cliente, max_docs: int = 150, hasta_t: float | None = None, n_hilos: int | None = None) -> dict:
+    """Procesa hasta `max_docs` hechos pendientes (el tope cuenta documentos enviados al modelo). Guarda tras cada documento; llamadas al modelo en paralelo."""
     total = {"procesados": 0, "ok": 0, "sin_evento": 0, "saltados": 0, "errores": 0, "pendientes": 0}
     pend = candidatos(almacen, empresas)
-    estados, llamadas = {}, 0
-    for i, (e, m) in enumerate(pend):
-        if llamadas >= max_docs:
-            total["pendientes"] = len(pend) - i
-            break
-        if hasta_t and time.monotonic() > hasta_t:
-            print("corte por tiempo: el resto queda para la proxima corrida")
-            total["pendientes"] = len(pend) - i
-            break
-        estado = estados.setdefault(e["cuit"], leer_eventos(almacen, e["cuit"]))
+    estados = {}
+
+    def trabajar(e, m):
         texto = alm.leer_texto(almacen, e["cuit"], m["id"])
         if not texto:
-            continue
+            return None
         try:
             resultado = procesar_texto(m["k"], texto, cliente)
-            if resultado["estado"] != "escaneado":
-                llamadas += 1
+            return conc.Res(resultado, llamo=resultado["estado"] != "escaneado")
         except Exception as error:  # red, API o JSON invalido: se reintenta (hasta MAX_INTENTOS)
-            llamadas += 1
-            resultado = {"estado": "error", "error": f"{type(error).__name__}: {error}"}
-            total["errores"] += 1
+            return conc.Res({"estado": "error", "error": f"{type(error).__name__}: {error}"}, llamo=True)
+
+    def confirmar(e, m, res):
+        resultado = res.datos
+        estado = estados.setdefault(e["cuit"], leer_eventos(almacen, e["cuit"]))
         registrar(estado, e, m, m["k"], resultado)
-        guardar_eventos(almacen, e["cuit"], estado)
+        with conc.ESCRITURA:
+            guardar_eventos(almacen, e["cuit"], estado)
         total["procesados"] += 1
+        total["errores"] += resultado["estado"] == "error"
         total["ok"] += resultado["estado"] == "ok"
         total["sin_evento"] += resultado["estado"] in ("no_es_evento", "sin_datos")
         total["saltados"] += resultado["estado"] == "escaneado"
         print(f"  {e['empresa']} #{m['id']} ({m['k']}): {resultado['estado']}", flush=True)
+
+    r = conc.ejecutar_lote(pend, trabajar, confirmar, max_docs, hasta_t, n_hilos)
+    if r["corte"]:
+        total["pendientes"] = len(pend) - r["indice"]
+        if r["corte"] == "tiempo":
+            print("corte por tiempo: el resto queda para la proxima corrida")
     return total
 
 

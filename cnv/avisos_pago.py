@@ -16,6 +16,7 @@ import time
 import unicodedata
 
 from . import almacen as alm
+from . import concurrencia as conc
 from .financieros import a_numero, candidatos_numero, dividir_paginas, normalizar, periodo_en_texto
 from .modelo import pedir_json
 from .ocr import ILEGIBLE
@@ -361,41 +362,44 @@ def contar_formularios(almacen, empresas: list) -> dict:
     return r
 
 
-def ejecutar(almacen, empresas: list, cliente, max_docs: int = 200, hasta_t: float | None = None) -> dict:
-    """Procesa hasta `max_docs` avisos pendientes (el tope cuenta documentos enviados al modelo)."""
+def ejecutar(almacen, empresas: list, cliente, max_docs: int = 200, hasta_t: float | None = None, n_hilos: int | None = None) -> dict:
+    """Procesa hasta `max_docs` avisos pendientes (el tope cuenta documentos enviados al modelo). Llamadas al modelo en paralelo; confirmacion en orden."""
     total = {"procesados": 0, "ok": 0, "saltados": 0, "errores": 0, "pendientes": 0, "formularios_sin_valores": 0, "sin_valores_legibles": 0}
     pend = candidatos(almacen, empresas)
-    estados, llamadas = {}, 0
-    for i, (e, m) in enumerate(pend):
-        if llamadas >= max_docs:
-            total["pendientes"] = len(pend) - i
-            break
-        if hasta_t and time.monotonic() > hasta_t:
-            print("corte por tiempo: el resto queda para la proxima corrida")
-            total["pendientes"] = len(pend) - i
-            break
-        estado = estados.setdefault(e["cuit"], leer_avisos(almacen, e["cuit"]))
+    estados = {}
+
+    def trabajar(e, m):
         texto = alm.leer_texto(almacen, e["cuit"], m["id"])
         if not texto:
-            continue
+            return None
         try:
             resultado = procesar_texto(texto, cliente)
             if resultado["estado"] == "formulario_sin_valores":
                 texto_ocr = alm.leer_texto_ocr(almacen, e["cuit"], m["id"])
                 if texto_ocr:  # los valores salieron del OCR: se verifica contra ese texto
                     resultado = procesar_texto(texto_ocr, cliente, origen="ocr")
-            if resultado["estado"] not in ("sin_texto", "no_es_pago_on", "formulario_sin_valores"):
-                llamadas += 1
+            return conc.Res(resultado, llamo=resultado["estado"] not in ("sin_texto", "no_es_pago_on", "formulario_sin_valores"))
         except Exception as error:  # red, API o JSON invalido: se reintenta (hasta MAX_INTENTOS)
-            llamadas += 1
-            resultado = {"estado": "error", "error": f"{type(error).__name__}: {error}"}
-            total["errores"] += 1
+            return conc.Res({"estado": "error", "error": f"{type(error).__name__}: {error}"}, llamo=True)
+
+    def confirmar(e, m, res):
+        resultado = res.datos
+        estado = estados.setdefault(e["cuit"], leer_avisos(almacen, e["cuit"]))
         registrar(estado, e, m, resultado)
-        guardar_avisos(almacen, e["cuit"], estado)  # tras cada documento: un corte no pierde lo ya pagado
+        with conc.ESCRITURA:
+            guardar_avisos(almacen, e["cuit"], estado)  # tras cada documento: un corte no pierde lo ya pagado
         total["procesados"] += 1
+        total["errores"] += resultado["estado"] == "error"
         total["ok"] += resultado["estado"] == "ok"
         total["saltados"] += resultado["estado"] in ("sin_texto", "no_es_pago_on", "formulario_sin_valores")
         total["formularios_sin_valores"] += resultado["estado"] == "formulario_sin_valores"
         total["sin_valores_legibles"] += resultado["estado"] == "sin_valores_legibles"
         print(f"  {e['empresa']} #{m['id']}: {resultado['estado']}", flush=True)
+
+    r = conc.ejecutar_lote(pend, trabajar, confirmar, max_docs, hasta_t, n_hilos)
+    if r["corte"]:
+        total["pendientes"] = len(pend) - r["indice"]
+        if r["corte"] == "tiempo":
+            print("corte por tiempo: el resto queda para la proxima corrida")
     return total
+

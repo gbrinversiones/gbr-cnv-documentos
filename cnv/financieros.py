@@ -15,6 +15,8 @@ import time
 import unicodedata
 
 from . import almacen as alm
+from . import concurrencia as conc
+from .concurrencia import crear_mensaje
 
 VERSION_EXTRACTOR = "5"  # 5: agrega flujo de efectivo operativo, capex, caja, deuda corriente / no corriente, resultado por accion y dividendos
 # 4: activo/pasivo corriente, intereses y depreciaciones (para los ratios)
@@ -349,7 +351,8 @@ def _coherencia_balance(cifras: dict) -> bool | None:
 
 def extraer_con_claude(recorte: str, cliente) -> dict:
     """Pide el JSON al modelo. `cliente` es anthropic.Anthropic() (o un doble en las pruebas)."""
-    r = cliente.messages.create(
+    r = crear_mensaje(
+        cliente,
         model=MODELO,
         max_tokens=4096,
         thinking={"type": "disabled"},
@@ -489,43 +492,40 @@ def candidatos(almacen, empresas: list, completar: bool = False) -> list:
     return salida
 
 
-def ejecutar(almacen, empresas: list, cliente, max_docs: int = 150, hasta_t: float | None = None, completar: bool = False) -> dict:
-    """Procesa hasta `max_docs` documentos pendientes (el tope cuenta documentos enviados al modelo)."""
+def ejecutar(almacen, empresas: list, cliente, max_docs: int = 150, hasta_t: float | None = None, completar: bool = False, n_hilos: int | None = None) -> dict:
+    """Procesa hasta `max_docs` documentos pendientes (el tope cuenta documentos enviados al modelo). Las llamadas al modelo van en paralelo
+    (cnv/concurrencia.py); la confirmacion y el guardado, de a uno y en orden."""
     total = {"procesados": 0, "ok": 0, "saltados": 0, "errores": 0, "pendientes": 0}
     pend = candidatos(almacen, empresas, completar)
     estados = {}
-    llamadas = 0
-    for i, (e, m) in enumerate(pend):
-        if llamadas >= max_docs:
-            total["pendientes"] = len(pend) - i
-            break
-        if hasta_t and time.monotonic() > hasta_t:
-            print("corte por tiempo: el resto queda para la proxima corrida")
-            total["pendientes"] = len(pend) - i
-            break
-        estado = estados.setdefault(e["cuit"], leer_financieros(almacen, e["cuit"]))
+
+    def trabajar(e, m):
         texto = alm.leer_texto(almacen, e["cuit"], m["id"])
         if not texto:
-            continue
+            return None
         if entidad_ajena(m, e):
-            registrar(estado, e, m, {"estado": "otra_entidad"})
-            guardar_financieros(almacen, e["cuit"], estado)
-            total["procesados"] += 1
-            total["saltados"] += 1
-            print(f"  {e['empresa']} #{m['id']}: otra_entidad (balance de una vinculada)", flush=True)
-            continue
+            return conc.Res({"estado": "otra_entidad"}, llamo=False)
         try:
             resultado = procesar_texto(texto, cliente)
-            if resultado["estado"] not in ("escaneado", "sin_paginas_relevantes"):
-                llamadas += 1
+            return conc.Res(resultado, llamo=resultado["estado"] not in ("escaneado", "sin_paginas_relevantes"))
         except Exception as error:  # red, API o JSON invalido: no se marca como procesado, se reintenta (hasta MAX_INTENTOS)
-            llamadas += 1
-            resultado = {"estado": "error", "error": f"{type(error).__name__}: {error}"}
-            total["errores"] += 1
+            return conc.Res({"estado": "error", "error": f"{type(error).__name__}: {error}"}, llamo=True)
+
+    def confirmar(e, m, res):
+        resultado = res.datos
+        estado = estados.setdefault(e["cuit"], leer_financieros(almacen, e["cuit"]))
         registrar(estado, e, m, resultado)
-        guardar_financieros(almacen, e["cuit"], estado)  # se guarda tras cada documento: un corte no pierde lo ya pagado
+        with conc.ESCRITURA:
+            guardar_financieros(almacen, e["cuit"], estado)  # se guarda tras cada documento: un corte no pierde lo ya pagado
         total["procesados"] += 1
+        total["errores"] += resultado["estado"] == "error"
         total["ok"] += resultado["estado"] == "ok"
-        total["saltados"] += resultado["estado"] in ("escaneado", "sin_paginas_relevantes")
-        print(f"  {e['empresa']} #{m['id']}: {resultado['estado']}", flush=True)
+        total["saltados"] += resultado["estado"] in ("escaneado", "sin_paginas_relevantes", "otra_entidad")
+        print(f"  {e['empresa']} #{m['id']}: " + ("otra_entidad (balance de una vinculada)" if resultado["estado"] == "otra_entidad" else resultado["estado"]), flush=True)
+
+    r = conc.ejecutar_lote(pend, trabajar, confirmar, max_docs, hasta_t, n_hilos)
+    if r["corte"]:
+        total["pendientes"] = len(pend) - r["indice"]
+        if r["corte"] == "tiempo":
+            print("corte por tiempo: el resto queda para la proxima corrida")
     return total

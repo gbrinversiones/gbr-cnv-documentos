@@ -12,6 +12,7 @@ import time
 import unicodedata
 
 from . import almacen as alm
+from . import concurrencia as conc
 from .modelo import pedir_json
 
 VERSION = "1"
@@ -107,31 +108,39 @@ def pendientes(almacen, empresas: list) -> list:
     return salida
 
 
-def ejecutar(almacen, empresas: list, cliente, max_docs: int = 500, hasta_t: float | None = None) -> dict:
+def ejecutar(almacen, empresas: list, cliente, max_docs: int = 500, hasta_t: float | None = None, n_hilos: int | None = None) -> dict:
+    """Clasifica hasta `max_docs` hechos. Las llamadas al modelo van en paralelo (cnv/concurrencia.py); el indice se actualiza y se guarda en el hilo principal, de a tandas."""
     total = {"clasificados": 0, "descartados": 0, "errores": 0, "pendientes": 0, "reintentos": 0}
     pend = pendientes(almacen, empresas)
     por_empresa = {}
-    llamadas = 0
+    confirmados = 0
 
     def guardar():
-        for cuit, idx in por_empresa.items():
-            alm.guardar_indice_empresa(almacen, cuit, idx)
+        with conc.ESCRITURA:
+            for cuit, idx in por_empresa.items():
+                alm.guardar_indice_empresa(almacen, cuit, idx)
 
-    try:
-        for i, (e, m) in enumerate(pend):
-            if llamadas >= max_docs or (hasta_t and time.monotonic() > hasta_t):
-                total["pendientes"] = len(pend) - i
-                break
-            texto = alm.leer_texto(almacen, e["cuit"], m["id"])
-            if not texto:
-                continue
-            llamadas += 1
-            try:
-                categoria, motivo = clasificar(cliente, e["empresa"], m.get("d", ""), texto, total)
-            except Exception as error:  # red o API: se reintenta en la proxima corrida, sin gastar un intento "de contenido"
-                total["errores"] += 1
-                print(f"  {e['empresa']} #{m['id']}: error {type(error).__name__}", flush=True)
-                continue
+    def trabajar(e, m):
+        texto = alm.leer_texto(almacen, e["cuit"], m["id"])
+        if not texto:
+            return None
+        stats = {}                                           # propio de este hilo: se suma al total al confirmar
+        try:
+            categoria, motivo = clasificar(cliente, e["empresa"], m.get("d", ""), texto, stats)
+            return conc.Res({"categoria": categoria, "motivo": motivo, "stats": stats})
+        except Exception as error:  # red o API: se reintenta en la proxima corrida, sin gastar un intento "de contenido"
+            return conc.Res({"error": type(error).__name__, "stats": stats})
+
+    def confirmar(e, m, res):
+        nonlocal confirmados
+        confirmados += 1
+        d = res.datos
+        total["reintentos"] += d["stats"].get("reintentos", 0)
+        if "error" in d:
+            total["errores"] += 1
+            print(f"  {e['empresa']} #{m['id']}: error {d['error']}", flush=True)
+        else:
+            categoria, motivo = d["categoria"], d["motivo"]
             indice = por_empresa.setdefault(e["cuit"], alm.leer_indice_empresa(almacen, e["cuit"]))
             for x in indice:
                 if x["id"] != m["id"]:
@@ -148,8 +157,13 @@ def ejecutar(almacen, empresas: list, cliente, max_docs: int = 500, hasta_t: flo
             else:
                 total["descartados"] += 1
                 print(f"  {e['empresa']} #{m['id']}: descartado ({motivo})", flush=True)
-            if llamadas % 20 == 0:  # de a tandas: un corte no pierde lo ya pagado
-                guardar()
+        if confirmados % 20 == 0:  # de a tandas: un corte no pierde lo ya pagado
+            guardar()
+
+    try:
+        r = conc.ejecutar_lote(pend, trabajar, confirmar, max_docs, hasta_t, n_hilos)
+        if r["corte"]:
+            total["pendientes"] = len(pend) - r["indice"]
     finally:
         guardar()
     return total

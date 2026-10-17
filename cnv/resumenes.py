@@ -7,6 +7,8 @@ import re
 import time
 
 from . import almacen as alm
+from . import concurrencia as conc
+from .concurrencia import crear_mensaje
 
 MODELO = "claude-haiku-5-5"
 MAX_CARACTERES_ENTRADA = 4000
@@ -29,7 +31,8 @@ def limpiar_resumen(texto: str) -> str:
 def resumir(cliente, empresa: str, titulo: str, texto: str) -> str:
     """Una frase, o "" si el modelo falla o no devuelve texto."""
     entrada = re.sub(r"\[pagina \d+\]", " ", texto)[:MAX_CARACTERES_ENTRADA]
-    r = cliente.messages.create(
+    r = crear_mensaje(
+        cliente,
         model=MODELO,
         max_tokens=300,
         thinking={"type": "disabled"},
@@ -52,37 +55,46 @@ def pendientes(almacen, empresas: list) -> list:
     return salida
 
 
-def ejecutar(almacen, empresas: list, cliente, max_docs: int = 300, hasta_t: float | None = None) -> dict:
+def ejecutar(almacen, empresas: list, cliente, max_docs: int = 300, hasta_t: float | None = None, n_hilos: int | None = None) -> dict:
+    """Resume hasta `max_docs` hechos. Las llamadas al modelo van en paralelo (cnv/concurrencia.py); el indice se actualiza y se guarda en el hilo principal, de a tandas."""
     total = {"resumidos": 0, "errores": 0, "pendientes": 0}
     pend = pendientes(almacen, empresas)
     por_empresa = {}
-    for i, (e, m) in enumerate(pend):
-        if total["resumidos"] + total["errores"] >= max_docs:
-            total["pendientes"] = len(pend) - i
-            break
-        if hasta_t and time.monotonic() > hasta_t:
-            total["pendientes"] = len(pend) - i
-            break
+
+    def guardar():
+        with conc.ESCRITURA:
+            for cuit, idx in por_empresa.items():
+                alm.guardar_indice_empresa(almacen, cuit, idx)
+
+    def trabajar(e, m):
         texto = alm.leer_texto(almacen, e["cuit"], m["id"])
         if not texto:
-            continue
+            return None
         try:
-            r = resumir(cliente, e["empresa"], m.get("d", ""), texto)
+            return conc.Res({"r": resumir(cliente, e["empresa"], m.get("d", ""), texto)})
         except Exception as error:  # red o API: se reintenta en la proxima corrida
+            return conc.Res({"error": type(error).__name__})
+
+    def confirmar(e, m, res):
+        if "error" in res.datos:
             total["errores"] += 1
-            print(f"  {e['empresa']} #{m['id']}: error {type(error).__name__}", flush=True)
-            continue
-        if not r:
+            print(f"  {e['empresa']} #{m['id']}: error {res.datos['error']}", flush=True)
+            return
+        if not res.datos["r"]:
             total["errores"] += 1
-            continue
+            return
         indice = por_empresa.setdefault(e["cuit"], alm.leer_indice_empresa(almacen, e["cuit"]))
         for x in indice:
             if x["id"] == m["id"]:
-                x["r"] = r
+                x["r"] = res.datos["r"]
         total["resumidos"] += 1
         if total["resumidos"] % 20 == 0:  # guarda de a tandas: un corte no pierde lo ya pagado
-            for cuit, idx in por_empresa.items():
-                alm.guardar_indice_empresa(almacen, cuit, idx)
-    for cuit, idx in por_empresa.items():
-        alm.guardar_indice_empresa(almacen, cuit, idx)
+            guardar()
+
+    try:
+        r = conc.ejecutar_lote(pend, trabajar, confirmar, max_docs, hasta_t, n_hilos)
+        if r["corte"]:
+            total["pendientes"] = len(pend) - r["indice"]
+    finally:
+        guardar()
     return total

@@ -4,13 +4,16 @@
 """
 import json
 
+from .concurrencia import crear_mensaje
+
 MODELO = "claude-haiku-5-5"
 
 
 def pedir_json(cliente, sistema: str, entrada: str, esquema: dict, max_tokens: int = 2048, aviso: str = "") -> dict:
     """Devuelve el JSON del modelo. Lanza RuntimeError si la respuesta esta incompleta, vacia o no es un objeto JSON:
     el llamador lo trata como error reintentable (no como dato). `aviso` se agrega al final del mensaje (para un reintento)."""
-    r = cliente.messages.create(
+    r = crear_mensaje(
+        cliente,
         model=MODELO,
         max_tokens=max_tokens,
         thinking={"type": "disabled"},

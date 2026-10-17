@@ -221,7 +221,7 @@ def _ejecutar(argv=None) -> int:
             return 2
         import anthropic
 
-        total = res.ejecutar(almacen, universo, anthropic.Anthropic(timeout=60.0), a.max, time.monotonic() + a.tiempo_max)
+        total = res.ejecutar(almacen, universo, anthropic.Anthropic(timeout=60.0, max_retries=0), a.max, time.monotonic() + a.tiempo_max)
         print("TOTAL", total)
         print(f"indice global: {construir_indice_global(almacen, universo)} documentos")
         return 0
@@ -248,7 +248,7 @@ def _ejecutar(argv=None) -> int:
             import anthropic
 
             empresas = [e for e in universo if not a.solo or e["cuit"] == a.solo.replace("-", "")]
-            print("TOTAL", eve.ejecutar(almacen, empresas, anthropic.Anthropic(timeout=120.0), a.max, time.monotonic() + a.tiempo_max))
+            print("TOTAL", eve.ejecutar(almacen, empresas, anthropic.Anthropic(timeout=120.0, max_retries=0), a.max, time.monotonic() + a.tiempo_max))
         print("indice eventos:", eve.construir_indice(almacen, universo), "eventos")
         return 0
 
@@ -277,7 +277,7 @@ def _ejecutar(argv=None) -> int:
             import anthropic
 
             empresas = [e for e in universo if not a.solo or e["cuit"] == a.solo.replace("-", "")]
-            print("TOTAL", cond.ejecutar(almacen, empresas, anthropic.Anthropic(timeout=180.0), a.max, time.monotonic() + a.tiempo_max))
+            print("TOTAL", cond.ejecutar(almacen, empresas, anthropic.Anthropic(timeout=180.0, max_retries=0), a.max, time.monotonic() + a.tiempo_max))
         print("indice condiciones:", cond.construir_indice(almacen, universo, cob.leer_ons(a.ons)))
         return 0
 
@@ -300,7 +300,7 @@ def _ejecutar(argv=None) -> int:
             return 2
         import anthropic
 
-        total = cla.ejecutar(almacen, universo, anthropic.Anthropic(timeout=60.0), a.max, time.monotonic() + a.tiempo_max)
+        total = cla.ejecutar(almacen, universo, anthropic.Anthropic(timeout=60.0, max_retries=0), a.max, time.monotonic() + a.tiempo_max)
         print("TOTAL", total)
         print(f"indice global: {construir_indice_global(almacen, universo)} documentos")
         return 0
@@ -316,7 +316,7 @@ def _ejecutar(argv=None) -> int:
         import anthropic
 
         empresas = [e for e in universo if not a.solo or e["cuit"] == a.solo.replace("-", "")]
-        total = avp.ejecutar(almacen, empresas, anthropic.Anthropic(timeout=120.0), a.max, time.monotonic() + a.tiempo_max)
+        total = avp.ejecutar(almacen, empresas, anthropic.Anthropic(timeout=120.0, max_retries=0), a.max, time.monotonic() + a.tiempo_max)
         print("TOTAL", total)
         print(f"indice avisos de pago: {avp.construir_indice(almacen, universo)} pagos")
         return 0
@@ -328,7 +328,7 @@ def _ejecutar(argv=None) -> int:
         import anthropic
 
         empresas = [e for e in universo if not a.solo or e["cuit"] == a.solo.replace("-", "")]
-        cliente = anthropic.Anthropic(timeout=120.0)
+        cliente = anthropic.Anthropic(timeout=120.0, max_retries=0)
         total = fin.ejecutar(almacen, empresas, cliente, a.max, time.monotonic() + a.tiempo_max, a.completar_campos)
         print("TOTAL", total)
         print(f"indice financieros: {fin.construir_indice_financieros(almacen, universo)} periodos")
