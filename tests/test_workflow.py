@@ -23,3 +23,11 @@ def test_sin_el_input_el_comando_no_lleva_el_flag():
     assert subprocess.run(["bash", "-e", "-c", paso], capture_output=True, text=True).stdout.split() == ["X", "Y"]
     paso = paso.replace('"false"', '"true"')
     assert subprocess.run(["bash", "-e", "-c", paso], capture_output=True, text=True).stdout.split() == ["X", "--completar-campos", "Y"]
+
+
+def test_la_concurrencia_se_configura_desde_el_workflow():
+    t = workflow()
+    assert "concurrencia:" in t and 'default: "4"' in t.split("concurrencia:")[1][:500]
+    assert "CNV_CONCURRENCIA: ${{ github.event.inputs.concurrencia || '4' }}" in t
+    job = t[t.index("\n  indice:"):]
+    assert job.index("CNV_CONCURRENCIA") < job.index("steps:")          # esta en el env del job: lo ven todos los pasos con modelo
