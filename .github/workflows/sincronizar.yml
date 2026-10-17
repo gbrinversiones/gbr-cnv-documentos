@@ -103,48 +103,76 @@ jobs:
       - run: pip install -r requirements.txt
       - name: Reconstruir el indice global
         run: python -m cnv indice
+      # Orden: primero lo barato y sin modelo (con lo que ya hay en el bucket: nunca queda sin correr aunque otro paso se corte), despues los
+      # pasos con modelo (cada uno con su tope propio de documentos y de tiempo), y al final una segunda pasada de lo que depende de sus resultados.
+      # Todos los pasos son independientes entre si: `if: always()` + `continue-on-error`, ninguno exige que otro haya terminado bien.
+      - name: Indice de busqueda de texto completo (BM25; sin modelo)
+        if: always()
+        continue-on-error: true
+        run: python -m cnv busqueda --tiempo-max 1500
+      - name: Auditoria contable de las cifras (sin modelo)
+        if: always()
+        continue-on-error: true
+        run: python -m cnv auditar-cifras
+      - name: Ratios por emisor (desde las cifras verificadas; sin modelo)
+        if: always()
+        continue-on-error: true
+        run: python -m cnv ratios
+      - name: Cobertura de emisores y ONs (sin modelo)
+        if: always()
+        continue-on-error: true
+        run: python -m cnv cobertura
+      - name: Novedades de los ultimos 7 dias (sin modelo)
+        if: always()
+        continue-on-error: true
+        run: python -m cnv novedades
       - name: Extraer cifras de estados contables (Claude Haiku, max 150 documentos)
+        if: always()
         continue-on-error: true
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: python -m cnv financieros --max 150 --tiempo-max 1200
-      - name: Auditoria contable de las cifras (sin modelo)
-        continue-on-error: true
-        run: python -m cnv auditar-cifras
-      - name: Ratios por emisor (desde las cifras verificadas; sin modelo)
-        continue-on-error: true
-        run: python -m cnv ratios
       - name: Resumir hechos relevantes nuevos (Claude Haiku, max 400 por corrida)
+        if: always()
         continue-on-error: true
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: python -m cnv resumenes --max 400 --tiempo-max 1500
       - name: Clasificar hechos relevantes (Claude Haiku, max 500 por corrida)
+        if: always()
         continue-on-error: true
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: python -m cnv clasificar --max 500 --tiempo-max 900
-      - name: Indice de busqueda de texto completo (BM25)
-        continue-on-error: true
-        run: python -m cnv busqueda --tiempo-max 1500
       - name: Estructurar avisos de pago de ONs (Claude Haiku, max 200 por corrida)
+        if: always()
         continue-on-error: true
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: python -m cnv avisos-pago --max 200 --tiempo-max 900
       - name: Condiciones de emision de las ON (Claude Haiku, max 100 documentos)
+        if: always()
         continue-on-error: true
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: python -m cnv condiciones --max 100 --tiempo-max 1200
-      - name: Cobertura de emisores y ONs (sin modelo)
+      - name: Auditoria contable de las cifras (segunda pasada, con las cifras nuevas)
+        if: always()
+        continue-on-error: true
+        run: python -m cnv auditar-cifras
+      - name: Ratios por emisor (segunda pasada)
+        if: always()
+        continue-on-error: true
+        run: python -m cnv ratios
+      - name: Cobertura de emisores y ONs (segunda pasada)
+        if: always()
         continue-on-error: true
         run: python -m cnv cobertura
       - name: Salud de la base (resumen del job)
         if: always()
         continue-on-error: true
         run: python -m cnv salud >> "$GITHUB_STEP_SUMMARY"
-      - name: Novedades de los ultimos 7 dias (sin modelo)
+      - name: Novedades de los ultimos 7 dias (segunda pasada)
         if: always()
         continue-on-error: true
         run: python -m cnv novedades
