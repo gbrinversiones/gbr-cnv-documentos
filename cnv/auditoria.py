@@ -37,6 +37,18 @@ TOLERANCIA_DEUDA = 0.05     # la suma corriente + no corriente puede diferir del
 EN_SERIE = ("ventas", "activo_total", "pasivo_total", "patrimonio_neto", "deuda_financiera", "efectivo", "activo_corriente", "pasivo_corriente",
             "caja_equivalentes", "deuda_financiera_corriente", "deuda_financiera_no_corriente")   # cifras comparables entre periodos
 ESCALAS = (1, 1_000, 1_000_000)
+_PESOS = ("peso", "pesos", "pesos argentinos", "peso argentino", "pesos argentinos (ars)", "ars", "$", "moneda nacional", "pesos (ars)", "$ (pesos)")
+_DOLARES = ("dolar", "dolares", "dolares estadounidenses", "dolar estadounidense", "dolares americanos", "dolar americano", "usd", "us$", "u$s", "u$d", "dolares (usd)", "us dollar", "us dollars", "dollars")
+
+
+def moneda_canonica(moneda) -> str:
+    """"pesos" / "dolares" para las escrituras habituales ("Pesos Argentinos", "ARS", "US$"...); cualquier otra se deja como esta (sin acentos, en minuscula).
+    Dos periodos del mismo emisor que escriben distinto la misma moneda no son un cambio de moneda."""
+    import unicodedata
+
+    t = unicodedata.normalize("NFKD", str(moneda or "")).encode("ascii", "ignore").decode().lower()
+    t = " ".join(t.replace(".", "").split())
+    return "pesos" if t in _PESOS else "dolares" if t in _DOLARES else t
 
 
 def _v(p: dict, campo: str):
@@ -99,7 +111,7 @@ def auditar_serie(periodos: list) -> list:
     hs = []
     grupos = {}
     for p in periodos:
-        grupos.setdefault((p.get("balance", "desconocido"), (p.get("moneda") or "").strip().lower()), []).append(p)
+        grupos.setdefault((p.get("balance", "desconocido"), moneda_canonica(p.get("moneda"))), []).append(p)
     por_balance = {}
     for p in periodos:
         por_balance.setdefault(p.get("balance", "desconocido"), []).append(p)
@@ -107,7 +119,7 @@ def auditar_serie(periodos: list) -> list:
     for bal, ps in por_balance.items():
         ps = sorted(ps, key=lambda p: (p["periodo"], int(p["doc"])))
         for ant, nue in zip(ps, ps[1:]):
-            if (ant.get("moneda") or "").strip().lower() != (nue.get("moneda") or "").strip().lower():
+            if moneda_canonica(ant.get("moneda")) != moneda_canonica(nue.get("moneda")):
                 hs.append(_h(nue, "moneda_cambia", [], f"{ant.get('moneda')} ({ant['periodo']}) -> {nue.get('moneda')} ({nue['periodo']})", "info"))
             elif ant.get("escala") != nue.get("escala"):
                 hs.append(_h(nue, "escala_cambia", [], f"escala {ant.get('escala')} ({ant['periodo']}) -> {nue.get('escala')} ({nue['periodo']})", "info"))

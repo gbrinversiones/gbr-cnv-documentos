@@ -185,6 +185,10 @@ jobs:
         if: always()
         continue-on-error: true
         run: python -m cnv salud >> "$GITHUB_STEP_SUMMARY"
+      - name: Muestra de calidad de cifras (resumen del job)
+        if: always()
+        continue-on-error: true
+        run: python -m cnv calidad >> "$GITHUB_STEP_SUMMARY"
       - name: Alertas de salud (un issue por dia como maximo, solo si hay anomalias)
         if: always()
         continue-on-error: true
