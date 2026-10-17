@@ -241,8 +241,11 @@ def test_tope_de_tiempo_deja_el_resto_pendiente(tmp_path, monkeypatch):
 
 # --- almacen: GCS ---------------------------------------------------------------------------
 
-class NotFound(Exception):
-    """Como google.api_core.exceptions.NotFound: el codigo lo reconoce por el nombre de la clase."""
+try:
+    from google.api_core.exceptions import NotFound      # la clase REAL (viene con google-cloud-storage): asi el codigo la reconoce por isinstance
+except ImportError:                                      # sin el paquete: una clase con el mismo nombre (el codigo cae al reconocimiento por nombre)
+    class NotFound(Exception):
+        pass
 
 
 class BlobFalso:

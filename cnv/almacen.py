@@ -65,6 +65,15 @@ class AlmacenLocal:
         return salida
 
 
+def _es_no_encontrado(error: Exception) -> bool:
+    """True si `error` es google.api_core.exceptions.NotFound. Se usa la clase REAL; solo si el paquete no se puede importar se reconoce por el nombre de la clase."""
+    try:
+        from google.api_core.exceptions import NotFound
+    except ImportError:
+        return type(error).__name__ == "NotFound"
+    return isinstance(error, NotFound)
+
+
 class AlmacenGCS:
     def __init__(self, bucket: str, credenciales_json: str | None = None):
         from google.cloud import storage
@@ -83,7 +92,7 @@ class AlmacenGCS:
         try:
             return self.bucket.blob(nombre).download_as_bytes()
         except Exception as error:
-            if type(error).__name__ != "NotFound":      # google.api_core.exceptions.NotFound (no se importa aca: el SDK de GCS se carga solo si hay bucket)
+            if not _es_no_encontrado(error):
                 raise
             return None
 

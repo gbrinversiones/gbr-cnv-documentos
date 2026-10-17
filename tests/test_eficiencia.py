@@ -209,3 +209,54 @@ def test_tabla_de_tiempos(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("CNV_TIEMPOS", str(ruta))
     assert cli.main(["tiempos"]) == 0 and "## Tiempo por paso" in capsys.readouterr().out
     assert tmp.leer(str(ruta))[-1][0] == "busqueda"          # el comando `tiempos` no se anota a si mismo
+
+
+def _gcs_con_blob(blob):
+    a = alm.AlmacenGCS.__new__(alm.AlmacenGCS)          # sin __init__: no hace falta el cliente real
+    a.bucket = SimpleNamespace(blob=lambda nombre: blob)
+    return a
+
+
+def test_gcs_leer_reconoce_el_notfound_real_de_google():
+    exc = pytest.importorskip("google.api_core.exceptions")
+
+    class Blob:
+        def download_as_bytes(self):
+            raise exc.NotFound("no existe")
+
+    assert _gcs_con_blob(Blob()).leer("x") is None
+
+
+def test_gcs_leer_con_el_paquete_real_no_confunde_otra_clase_llamada_notfound():
+    pytest.importorskip("google.api_core.exceptions")
+
+    class NotFound(Exception):          # mismo nombre, otra clase: con el paquete instalado manda la clase real
+        pass
+
+    class Blob:
+        def download_as_bytes(self):
+            raise NotFound("x")
+
+    with pytest.raises(NotFound):
+        _gcs_con_blob(Blob()).leer("x")
+
+
+def test_gcs_leer_otros_errores_de_google_se_propagan():
+    exc = pytest.importorskip("google.api_core.exceptions")
+
+    class Blob:
+        def download_as_bytes(self):
+            raise exc.Forbidden("403")
+
+    with pytest.raises(exc.Forbidden):
+        _gcs_con_blob(Blob()).leer("x")
+
+
+def test_sin_el_paquete_se_reconoce_por_el_nombre_de_la_clase(monkeypatch):
+    monkeypatch.setitem(sys.modules, "google.api_core", None)                   # None en sys.modules = el import falla con ImportError
+    monkeypatch.setitem(sys.modules, "google.api_core.exceptions", None)
+
+    class NotFound(Exception):
+        pass
+
+    assert alm._es_no_encontrado(NotFound("x")) is True and alm._es_no_encontrado(PermissionError("x")) is False
