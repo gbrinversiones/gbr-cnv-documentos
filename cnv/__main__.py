@@ -10,6 +10,7 @@
   python -m cnv ocr [--max-docs N] [--tiempo-max 7200]   # OCR de los escaneados; requiere tesseract (ver cnv/ocr.py)
   python -m cnv novedades [--dias 7] [--hoy AAAA-MM-DD]   # documentos nuevos y lo presentado en los ultimos dias (sin modelo)
   python -m cnv cobertura [--ons data/ons.csv] [--hoy AAAA-MM-DD]   # cruce emisores/ONs con documentos y datos (sin modelo)
+  python -m cnv condiciones [--max 100] [--solo CUIT] [--tiempo-max 1200] [--solo-indice]   # condiciones de emision de las ON (prospectos/suplementos/avisos)
   python -m cnv ratios                            # ratios por emisor y periodo desde las cifras verificadas (sin modelo)
   python -m cnv busqueda [--tiempo-max 1500]      # indice de texto completo (BM25) para el buscador; reconstruye todo
   python -m cnv clasificar [--max 500] [--tiempo-max 900]
@@ -28,6 +29,7 @@ from . import avisos_pago as avp
 from . import busqueda as bus
 from . import clasificacion as cla
 from . import cobertura as cob
+from . import condiciones as cond
 from . import escaneados as esc
 from . import novedades as nov
 from . import ocr
@@ -82,6 +84,12 @@ def main(argv=None) -> int:
     oc.add_argument("--tiempo-max", type=int, default=7200)
     oc.add_argument("--solo", default=None, help="CUIT: procesa solo esa empresa")
     sub.add_parser("ratios")
+    cd = sub.add_parser("condiciones")
+    cd.add_argument("--max", type=int, default=100, help="maximo de documentos enviados al modelo por corrida (controla el costo)")
+    cd.add_argument("--solo", default=None, help="CUIT: procesa solo esa empresa")
+    cd.add_argument("--tiempo-max", type=int, default=1200)
+    cd.add_argument("--ons", default="data/ons.csv", help="CSV de ONs con el CUIT de cada emisor (para vincular ticker -> condiciones)")
+    cd.add_argument("--solo-indice", action="store_true", help="no llama al modelo: solo reconstruye cnv/indice/condiciones.json.gz")
     nv = sub.add_parser("novedades")
     nv.add_argument("--dias", type=int, default=nov.DIAS, help="ventana en dias segun la fecha de presentacion")
     nv.add_argument("--hoy", default=None, help="AAAA-MM-DD (para reproducir un informe)")
@@ -170,6 +178,18 @@ def main(argv=None) -> int:
     if a.cmd == "cobertura":
         r = cob.construir(almacen, universo, cob.leer_ons(a.ons), dt.date.fromisoformat(a.hoy) if a.hoy else None)
         print("TOTAL", json.dumps(r, ensure_ascii=False))
+        return 0
+
+    if a.cmd == "condiciones":
+        if not a.solo_indice:
+            if not os.environ.get("ANTHROPIC_API_KEY"):
+                print("falta ANTHROPIC_API_KEY")
+                return 2
+            import anthropic
+
+            empresas = [e for e in universo if not a.solo or e["cuit"] == a.solo.replace("-", "")]
+            print("TOTAL", cond.ejecutar(almacen, empresas, anthropic.Anthropic(timeout=180.0), a.max, time.monotonic() + a.tiempo_max))
+        print("indice condiciones:", cond.construir_indice(almacen, universo, cob.leer_ons(a.ons)))
         return 0
 
     if a.cmd == "ratios":

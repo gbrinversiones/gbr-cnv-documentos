@@ -129,6 +129,11 @@ jobs:
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: python -m cnv avisos-pago --max 200 --tiempo-max 900
+      - name: Condiciones de emision de las ON (Claude Haiku, max 100 documentos)
+        continue-on-error: true
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: python -m cnv condiciones --max 100 --tiempo-max 1200
       - name: Cobertura de emisores y ONs (sin modelo)
         continue-on-error: true
         run: python -m cnv cobertura
