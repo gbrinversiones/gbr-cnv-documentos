@@ -37,6 +37,7 @@ from . import almacen as alm
 from . import auditoria as aud
 from . import avisos_pago as avp
 from . import busqueda as bus
+from . import concurrencia as conc
 from . import clasificacion as cla
 from . import calidad as cal
 from . import cobertura as cob
@@ -393,6 +394,9 @@ def main(argv=None) -> int:
     finally:
         seg = time.monotonic() - t0
         print(f"TIEMPO {comando}: {seg:.1f} s", file=sys.stderr, flush=True)      # stderr: no ensucia la salida de los comandos que imprimen JSON/Markdown
+        g = conc.gasto()
+        if g.llamadas:
+            print(f"USO {comando}: {g.resumen()}", file=sys.stderr, flush=True)  # tokens medidos con response.usage y dolares de lista
         ruta = os.environ.get("CNV_TIEMPOS")
         if ruta and comando not in ("tiempos", "?"):
             try:

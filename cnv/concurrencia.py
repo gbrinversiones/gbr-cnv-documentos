@@ -219,14 +219,81 @@ def con_reintentos(fn, intentos: int = INTENTOS_API, dormir=None, limitador: Lim
         return r
 
 
+# ---------------------------------------------------------------------------
+# Gasto real (tokens medidos con response.usage) y tope en dolares
+# ---------------------------------------------------------------------------
+# Precios de claude-haiku-5-5 por millon de tokens (lista de la API a 2026-10-06): hasta 100K tokens de prompt 0,10 entrada / 0,50 salida; por encima 0,50 / 2,50.
+# Lectura de cache = 10 % de la entrada, escritura = 125 %. Son precios de lista: el gasto real puede diferir si la cuenta tiene otro plan.
+UMBRAL_PROMPT_LARGO = 100_000
+PRECIOS = {"corto": (0.10, 0.50), "largo": (0.50, 2.50)}
+TOPE_USD_DEFECTO = 3.0     # por COMANDO (proceso): un paso con modelo no puede gastar mas que esto en una corrida
+
+
+def tope_usd() -> float:
+    """CNV_MAX_USD: gasto maximo en dolares de un comando (proceso). Un valor no numerico o menor o igual a cero vale el defecto (no se puede apagar)."""
+    try:
+        v = float(os.environ.get("CNV_MAX_USD", TOPE_USD_DEFECTO))
+    except ValueError:
+        return TOPE_USD_DEFECTO
+    return v if v > 0 else TOPE_USD_DEFECTO
+
+
+class Gasto:
+    """Acumula tokens y dolares de las respuestas del modelo (seguro entre hilos)."""
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self.llamadas = self.entrada = self.salida = self.cache_leida = self.cache_escrita = 0
+        self.usd = 0.0
+
+    def sumar(self, respuesta) -> None:
+        u = getattr(respuesta, "usage", None)
+        if u is None:
+            return
+        ent = int(getattr(u, "input_tokens", 0) or 0)
+        sal = int(getattr(u, "output_tokens", 0) or 0)
+        leida = int(getattr(u, "cache_read_input_tokens", 0) or 0)
+        escrita = int(getattr(u, "cache_creation_input_tokens", 0) or 0)
+        p_ent, p_sal = PRECIOS["largo" if ent + leida + escrita > UMBRAL_PROMPT_LARGO else "corto"]
+        costo = (ent * p_ent + leida * p_ent * 0.10 + escrita * p_ent * 1.25 + sal * p_sal) / 1_000_000
+        with self._lock:
+            self.llamadas += 1
+            self.entrada += ent
+            self.salida += sal
+            self.cache_leida += leida
+            self.cache_escrita += escrita
+            self.usd += costo
+
+    def resumen(self) -> str:
+        return (f"llamadas={self.llamadas} entrada={self.entrada} salida={self.salida} cache_leida={self.cache_leida} "
+                f"cache_escrita={self.cache_escrita} USD~{self.usd:.4f} (tope {tope_usd():.2f})")
+
+
+_GASTO = Gasto()
+
+
+def gasto() -> Gasto:
+    return _GASTO
+
+
+def reiniciar_gasto() -> None:
+    """Para las pruebas: vuelve el acumulador a cero."""
+    global _GASTO
+    _GASTO = Gasto()
+
+
 def crear_mensaje(cliente, **kw):
     """`cliente.messages.create(**kw)` con presupuesto de tokens por minuto y reintentos. Es el unico punto por el que pasan las llamadas al modelo.
     Cada intento (tambien los reintentos) reserva sus tokens estimados antes de salir."""
     tokens = estimar_tokens(kw)
 
     def llamar():
+        if gasto().usd >= tope_usd():                    # tope de dolares del comando: se corta limpio, sin marcar documentos
+            raise ErrorDeCuenta(f"tope de gasto alcanzado (CNV_MAX_USD={tope_usd():.2f}, gastado USD~{gasto().usd:.4f})")
         presupuesto().esperar(tokens)
-        return cliente.messages.create(**kw)
+        r = cliente.messages.create(**kw)
+        gasto().sumar(r)
+        return r
 
     try:
         return con_reintentos(llamar)
