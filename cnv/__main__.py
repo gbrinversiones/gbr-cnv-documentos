@@ -83,6 +83,7 @@ def _ejecutar(argv=None) -> int:
     f.add_argument("--max", type=int, default=150, help="maximo de documentos enviados al modelo por corrida (controla el costo)")
     f.add_argument("--solo", default=None, help="CUIT: procesa solo esa empresa")
     f.add_argument("--tiempo-max", type=int, default=1200, help="segundos; corta limpio y deja el resto para la proxima corrida")
+    f.add_argument("--reextraer-sin-resultados", action="store_true", help="vuelve a pedir (gasta modelo) los estados ya procesados que no trajeron ni ventas ni resultado operativo (estado de resultados fuera del recorte); una sola vez por documento")
     f.add_argument("--completar-campos", action="store_true", help="vuelve a pedir (gasta modelo) los estados ya procesados con una version anterior para que sumen los campos nuevos")
     un = sub.add_parser("universo")
     un.add_argument("--verificar", action="store_true", help="confirma cada CUIT contra la pagina de la CNV y reporta discrepancias")
@@ -349,7 +350,7 @@ def _ejecutar(argv=None) -> int:
 
         empresas = [e for e in universo if not a.solo or e["cuit"] == a.solo.replace("-", "")]
         cliente = anthropic.Anthropic(timeout=120.0, max_retries=0)
-        total = fin.ejecutar(almacen, empresas, cliente, a.max, time.monotonic() + a.tiempo_max, a.completar_campos)
+        total = fin.ejecutar(almacen, empresas, cliente, a.max, time.monotonic() + a.tiempo_max, a.completar_campos, reextraer_sin_resultados=a.reextraer_sin_resultados)
         print("TOTAL", total)
         print(f"indice financieros: {fin.construir_indice_financieros(almacen, universo)} periodos")
         return 0

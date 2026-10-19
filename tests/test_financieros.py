@@ -473,7 +473,7 @@ def test_documentos_de_version_4_no_se_vuelven_a_pagar_salvo_con_completar(tmp_p
     alm.guardar_indice_empresa(a, emp["cuit"], [{"id": "7", "t": "estados_contables", "f": "2026-08-10", "texto_ok": True, "d": "x"}])
     alm.guardar_texto(a, emp["cuit"], "7", BALANCE)
     fin.guardar_financieros(a, emp["cuit"], {"periodos": [], "procesados": {"7": {"v": "4", "estado": "ok"}}})
-    assert fin.VERSION_EXTRACTOR == "5" and fin.candidatos(a, [emp]) == []
+    assert fin.VERSION_EXTRACTOR == "6" and fin.candidatos(a, [emp]) == []
     assert [m["id"] for _, m in fin.candidatos(a, [emp], completar=True)] == ["7"]
     c = ClienteFalso(respuesta())
     assert fin.ejecutar(a, [emp], c, max_docs=5, completar=True)["ok"] == 1
@@ -483,3 +483,34 @@ def test_documentos_de_version_4_no_se_vuelven_a_pagar_salvo_con_completar(tmp_p
 
 def test_el_pedido_al_modelo_describe_los_campos_nuevos():
     assert all(c in fin.INSTRUCCIONES for c in NUEVOS) and set(fin.ESQUEMA["properties"]["cifras"]["items"]["properties"]["campo"]["enum"]) == set(fin.CAMPOS)
+
+
+# ---- recorte: los estados principales siempre entran (bug real: anual de YPF en ingles, 120 paginas) ----
+def _pagina(titulo, filas=40):
+    return titulo + "\n" + "\n".join(f"Linea {i} {1000 + i},{i}00 {2000 + i},{i}50" for i in range(filas))
+
+
+def test_el_estado_de_resultados_entra_aunque_las_notas_puntuen_mas():
+    notas = [f"Nota {n} loans borrowings financial debt cash and cash equivalents total assets operating profit revenues net income " * 30 + " 1 2 3 4 5 6 7 8 9 0" * 20 for n in range(2, 14)]
+    resultados = _pagina("CONSOLIDATED STATEMENTS OF COMPREHENSIVE INCOME\nFOR THE YEARS ENDED DECEMBER 31, 2025\nRevenues 18,448 19,293\nOperating profit 1,740 1,480")
+    texto = "[pagina 1]\nYPF SOCIEDAD ANONIMA\n" + "".join(f"\n[pagina {n}]\n{t}" for n, t in zip(range(2, 14), notas)) + f"\n[pagina 14]\n{resultados}"
+    recorte, paginas = fin.armar_recorte(texto, max_caracteres=14000)
+    assert 14 in paginas and "Operating profit 1,740" in recorte
+
+
+def test_el_indice_con_los_titulos_no_cuenta_como_estado_principal():
+    indice = "CONTENT\nConsolidated statements of comprehensive income 4\nNotes 7"
+    assert not fin.es_estado_principal(fin.unicodedata.normalize("NFKD", indice).lower(), sum(c.isdigit() for c in indice))
+    estado = _pagina("ESTADO DE RESULTADOS CONSOLIDADO")
+    assert fin.es_estado_principal(fin.unicodedata.normalize("NFKD", estado).lower(), sum(c.isdigit() for c in estado))
+
+
+def test_docs_sin_resultados_y_reextraccion_unica():
+    datos = {"periodos": [{"doc": "1", "cifras": {"ventas": {"valor": 1}}}, {"doc": "2", "cifras": {"activo_total": {"valor": 5}}}, {"doc": "3", "cifras": {"resultado_operativo": {"valor": 1}}}]}
+    assert fin.docs_sin_resultados(datos) == {"2"}
+    estado = {"procesados": {"2": {"v": "5", "estado": "ok"}, "1": {"v": "5", "estado": "ok"}}}
+    assert fin.ya_procesado(estado, "2") is True                                           # sin el flag no se vuelve a pagar
+    assert fin.ya_procesado(estado, "2", reextraer=frozenset({"2"})) is False              # con el flag, se pide de nuevo
+    assert fin.ya_procesado(estado, "1", reextraer=frozenset({"2"})) is True               # los que si tienen resultados no
+    estado["procesados"]["2"]["v"] = fin.VERSION_EXTRACTOR
+    assert fin.ya_procesado(estado, "2", reextraer=frozenset({"2"})) is True               # ya re-extraido con la version nueva: una sola vez

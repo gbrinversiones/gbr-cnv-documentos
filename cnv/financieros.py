@@ -18,9 +18,10 @@ from . import almacen as alm
 from . import concurrencia as conc
 from .concurrencia import crear_mensaje
 
-VERSION_EXTRACTOR = "5"  # 5: agrega flujo de efectivo operativo, capex, caja, deuda corriente / no corriente, resultado por accion y dividendos
+VERSION_EXTRACTOR = "6"  # 6: el recorte prioriza las paginas de los estados principales (resultados, situacion financiera, flujo de efectivo); antes un anual en ingles de 120 paginas dejaba afuera el estado de resultados.
+# 5: 5: agrega flujo de efectivo operativo, capex, caja, deuda corriente / no corriente, resultado por accion y dividendos
 # 4: activo/pasivo corriente, intereses y depreciaciones (para los ratios)
-VERSIONES_COMPATIBLES = ("3", "4")  # sus resultados siguen valiendo; solo se re-extraen a pedido (--completar-campos)
+VERSIONES_COMPATIBLES = ("3", "4", "5")  # sus resultados siguen valiendo; solo se re-extraen a pedido (--completar-campos)
 MODELO = "claude-haiku-5-5"
 MAX_CARACTERES = 40_000
 CARACTERES_PORTADA = 3_000
@@ -159,11 +160,29 @@ def texto_util(texto: str) -> bool:
 # Recorte de paginas relevantes
 # ---------------------------------------------------------------------------
 
+TITULOS_ESTADOS = (
+    "statement of financial position", "statements of financial position", "statement of comprehensive income", "statements of comprehensive income",
+    "income statement", "statement of cash flow", "statements of cash flow", "statement of cash flows", "statements of cash flows",
+    "estado de situacion financiera", "estado de situacion patrimonial", "estado de resultados", "estado del resultado", "estado de flujo de efectivo", "estado de flujos de efectivo",
+    "estados de resultados", "estados de situacion financiera", "estados de flujos de efectivo", "estados de flujo de efectivo",
+)
+BONUS_ESTADO_PRINCIPAL = 60   # mas que cualquier pagina de notas (una nota con muchas palabras clave rondaba 40-56): el estado principal siempre entra
+DIGITOS_ESTADO = 120          # una pagina con el titulo pero casi sin numeros es el indice o la portada, no el estado
+
+
+def es_estado_principal(texto_normalizado: str, digitos: int) -> bool:
+    """True si la pagina ARRANCA con el titulo de un estado financiero principal y trae numeros (no es el indice)."""
+    return digitos >= DIGITOS_ESTADO and any(t in texto_normalizado[:500] for t in TITULOS_ESTADOS)
+
+
 def puntaje_pagina(texto: str) -> int:
     t = unicodedata.normalize("NFKD", texto)
     t = "".join(c for c in t if not unicodedata.combining(c)).lower()
     t = re.sub(r"\s+", " ", t)
-    return sum(peso * min(t.count(clave), 3) for clave, peso in PALABRAS_CLAVE.items())
+    puntaje = sum(peso * min(t.count(clave), 3) for clave, peso in PALABRAS_CLAVE.items())
+    if es_estado_principal(t, sum(c.isdigit() for c in texto)):
+        puntaje += BONUS_ESTADO_PRINCIPAL
+    return puntaje
 
 
 def armar_recorte(texto: str, max_caracteres: int = MAX_CARACTERES) -> tuple:
@@ -408,7 +427,19 @@ def guardar_financieros(almacen, cuit: str, datos: dict) -> None:
     almacen.guardar(f"cnv/financieros/{cuit}.json", json.dumps(datos, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
 
 
-def ya_procesado(estado: dict, doc_id: str, completar: bool = False) -> bool:
+def docs_sin_resultados(datos: dict) -> set:
+    """Documentos "ok" cuyas cifras no traen ni ventas ni resultado operativo: el estado de resultados no llego al modelo (recorte)."""
+    con, todos = set(), set()
+    for p in datos.get("periodos", []):
+        doc = str(p.get("doc"))
+        todos.add(doc)
+        c = p.get("cifras") or {}
+        if "ventas" in c or "resultado_operativo" in c:
+            con.add(doc)
+    return todos - con
+
+
+def ya_procesado(estado: dict, doc_id: str, completar: bool = False, reextraer: frozenset = frozenset()) -> bool:
     """Procesado con esta version del extractor (o agotados los intentos de un error). Las versiones compatibles tambien cuentan:
     no se vuelve a pagar un documento solo porque se agregaron campos; con `completar` se vuelven a pedir los "ok" de versiones
     compatibles para que sumen los campos nuevos."""
@@ -417,6 +448,8 @@ def ya_procesado(estado: dict, doc_id: str, completar: bool = False) -> bool:
         return False
     if p.get("estado") == "error":
         return p.get("intentos", 0) >= MAX_INTENTOS
+    if doc_id in reextraer and p.get("v") != VERSION_EXTRACTOR:
+        return False        # sin estado de resultados con una version anterior: se vuelve a pedir UNA vez con el recorte nuevo
     if p.get("v") in VERSIONES_COMPATIBLES:
         return not (completar and p.get("estado") == "ok")
     return p.get("v") == VERSION_EXTRACTOR
@@ -479,24 +512,25 @@ def construir_indice_financieros(almacen, empresas: list) -> int:
     return len(filas)
 
 
-def candidatos(almacen, empresas: list, completar: bool = False) -> list:
+def candidatos(almacen, empresas: list, completar: bool = False, reextraer_sin_resultados: bool = False) -> list:
     """[(empresa, meta)] de estados contables con texto y sin procesar, los mas recientes primero."""
     salida = []
     for e in empresas:
         estado = leer_financieros(almacen, e["cuit"])
+        reextraer = frozenset(docs_sin_resultados(estado)) if reextraer_sin_resultados else frozenset()
         for m in alm.leer_indice_empresa(almacen, e["cuit"]):
             # un documento leido por OCR no se usa para cifras: un digito mal leido igual "verificaria" contra su propia cita
-            if m.get("t") == "estados_contables" and m.get("texto_ok") and not m.get("ocr") and not ya_procesado(estado, m["id"], completar):
+            if m.get("t") == "estados_contables" and m.get("texto_ok") and not m.get("ocr") and not ya_procesado(estado, m["id"], completar, reextraer):
                 salida.append((e, m))
     salida.sort(key=lambda x: (x[1].get("f") or "", int(x[1]["id"])), reverse=True)
     return salida
 
 
-def ejecutar(almacen, empresas: list, cliente, max_docs: int = 150, hasta_t: float | None = None, completar: bool = False, n_hilos: int | None = None) -> dict:
+def ejecutar(almacen, empresas: list, cliente, max_docs: int = 150, hasta_t: float | None = None, completar: bool = False, n_hilos: int | None = None, reextraer_sin_resultados: bool = False) -> dict:
     """Procesa hasta `max_docs` documentos pendientes (el tope cuenta documentos enviados al modelo). Las llamadas al modelo van en paralelo
     (cnv/concurrencia.py); la confirmacion y el guardado, de a uno y en orden."""
     total = {"procesados": 0, "ok": 0, "saltados": 0, "errores": 0, "pendientes": 0}
-    pend = candidatos(almacen, empresas, completar)
+    pend = candidatos(almacen, empresas, completar, reextraer_sin_resultados)
     estados = {}
 
     def trabajar(e, m):
