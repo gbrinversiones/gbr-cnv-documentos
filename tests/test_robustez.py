@@ -533,3 +533,29 @@ def test_cli_ocr_recorre_las_empresas(monkeypatch, tmp_path, capsys):
     salida = capsys.readouterr().out
     assert "2 con texto por OCR" in salida and "OTRA" not in salida
     monkeypatch.delenv("CNV_OCR", raising=False)
+
+
+def test_empresa_sin_historia_se_lista_desde_la_carga_inicial(tmp_path, monkeypatch):
+    """Ternium/TGN/etc.: el sync diario miraba 30 dias, sin presentaciones en esa ventana el indice quedaba vacio para siempre."""
+    import datetime as dt
+    a = alm.AlmacenLocal(str(tmp_path))
+    pedidos = []
+
+    def listar(cuit, desde):
+        pedidos.append(desde)
+        return []
+
+    monkeypatch.setattr(sincronizar, "listar", listar)
+    reciente = dt.date(2026, 9, 19)
+    sincronizar.sincronizar_empresa(a, EMP, reciente)
+    assert pedidos[-1] == sincronizar.DESDE_CARGA_INICIAL                      # indice vacio -> historia completa
+    # con documentos pero sin ningun estado contable (Pampa, Edenor...) tambien
+    hr = {"id": "1", "c": EMP["cuit"], "t": "hechos", "texto_ok": True}
+    assert sincronizar.desde_efectivo([hr], reciente, ("hechos", "estados_contables")) == sincronizar.DESDE_CARGA_INICIAL
+    # con estados contables en el indice (aunque sin texto) rige la ventana pedida
+    ec = {"id": "2", "c": EMP["cuit"], "t": "estados_contables", "texto_ok": False, "intentos": 3}
+    assert sincronizar.desde_efectivo([hr, ec], reciente, ("hechos", "estados_contables")) == reciente
+    # si no se pidieron estados contables, solo cuenta el indice vacio
+    assert sincronizar.desde_efectivo([hr], reciente, ("hechos",)) == reciente
+    # un --desde mas viejo que la carga inicial se respeta
+    assert sincronizar.desde_efectivo([], dt.date(2020, 1, 1), ("hechos",)) == dt.date(2020, 1, 1)

@@ -15,6 +15,7 @@ from .listado import listar, sesion
 TIPOS_TEXTO = ("hechos", "estados_contables", "prospectos", "avisos_pago", "actas")
 TIPOS_DEFECTO = TIPOS_TEXTO
 MAX_INTENTOS = 3
+DESDE_CARGA_INICIAL = dt.date(2023, 1, 1)  # historia que se baja de una empresa que todavia no tiene la suya (ver desde_efectivo)
 GUARDAR_CADA = 10  # documentos: el indice se guarda de a tandas para que un corte no obligue a rebajar lo ya bajado
 
 
@@ -33,6 +34,16 @@ def _con_reintentos(fn, intentos: int = 3, espera: float = 4.0):
             if n < intentos - 1:  # despues del ultimo intento no tiene sentido esperar
                 time.sleep(espera * (n + 1))
     raise ultimo
+
+
+def desde_efectivo(indice: list, desde: dt.date, tipos: tuple) -> dt.date:
+    """Fecha desde la que se lista a la empresa. El sync diario mira solo los ultimos dias; una empresa recien agregada al universo (o
+    sin ningun estado contable en el indice) nunca tuvo su carga inicial y, si no publico nada en esa ventana, quedaba con el indice
+    vacio o sin balances para siempre. Todas las empresas presentan estados contables, asi que ninguno en el indice (con o sin texto)
+    significa que falta la historia: se lista desde DESDE_CARGA_INICIAL. Lo ya bajado no se repite (ver `pendientes`)."""
+    if not indice or ("estados_contables" in tipos and not any(m.get("t") == "estados_contables" for m in indice)):
+        return min(desde, DESDE_CARGA_INICIAL)
+    return desde
 
 
 def pendientes(docs: list, indice: list, tipos: tuple) -> list:
@@ -108,8 +119,9 @@ def _fusionar(previo: dict | None, meta: dict) -> dict:
 def sincronizar_empresa(almacen, empresa: dict, desde: dt.date, tipos: tuple = TIPOS_DEFECTO, trabajadores: int = 3, max_docs: int | None = None,
                         hasta_t: float | None = None, limites: Limites | None = None) -> dict:
     """Baja los documentos nuevos de una empresa. Devuelve {"nuevos","fallidos","pendientes"}."""
-    docs = _con_reintentos(lambda: listar(empresa["cuit"], desde))
     indice = alm.leer_indice_empresa(almacen, empresa["cuit"])
+    desde = desde_efectivo(indice, desde, tipos)
+    docs = _con_reintentos(lambda: listar(empresa["cuit"], desde))
     por_id = {d["id"]: d for d in indice}
     # el listado de hoy tambien alimenta el indice con los documentos de otros tipos (solo metadatos, sin texto)
     for d in docs:
