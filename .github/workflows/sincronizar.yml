@@ -42,6 +42,9 @@ on:
       resetear_errores_api:
         description: "true = antes de los pasos con modelo, devuelve a pendiente los documentos marcados con error de API/cuenta (sin saldo, clave, limites de tasa) con `python -m cnv reintentos --reset`. No toca errores de contenido. Default false"
         default: "false"
+      reextraer_sin_resultados:
+        description: "true = el paso financieros vuelve a pedir (gasta modelo, ~US$ 0,002 por documento) los estados que no trajeron ni ventas ni resultado operativo (el estado de resultados quedaba fuera del recorte). Una sola vez por documento. Default false"
+        default: "false"
       completar_campos:
         description: "true = el paso financieros vuelve a pedir (gasta modelo) los estados ya procesados con una version anterior del extractor para que sumen los campos nuevos (--completar-campos). Usar con cupo_modelo 3-4 hasta vaciar los pendientes. Default false"
         type: boolean
@@ -117,6 +120,7 @@ jobs:
       CNV_MAX_USD: ${{ github.event.inputs.tope_usd || '1' }}
       CUPO_MODELO: ${{ github.event.inputs.cupo_modelo || '1' }}
       COMPLETAR_CAMPOS: ${{ github.event.inputs.completar_campos || 'false' }}
+      REEXTRAER_SIN_RESULTADOS: ${{ github.event.inputs.reextraer_sin_resultados || 'false' }}
       CNV_CONCURRENCIA: ${{ github.event.inputs.concurrencia || '2' }}
       CNV_TPM: ${{ github.event.inputs.tpm || '150000' }}
       GCS_BUCKET: ${{ vars.GCS_BUCKET }}
@@ -166,7 +170,7 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: |
           K="$CUPO_MODELO"; case "$K" in 1|2|3|4) ;; *) echo "cupo_modelo debe ser 1-4"; exit 1;; esac
-          extra=(); if [ "$COMPLETAR_CAMPOS" = "true" ]; then extra=(--completar-campos); fi
+          extra=(); if [ "$COMPLETAR_CAMPOS" = "true" ]; then extra=(--completar-campos); fi; if [ "$REEXTRAER_SIN_RESULTADOS" = "true" ]; then extra+=(--reextraer-sin-resultados); fi
           python -m cnv financieros --max $((150*K)) --tiempo-max $((1200*K)) "${extra[@]}"
       - name: Resumir hechos relevantes nuevos (Claude Haiku, max 400 por corrida)
         if: always()
