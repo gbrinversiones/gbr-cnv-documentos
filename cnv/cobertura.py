@@ -157,4 +157,16 @@ def construir(almacen, universo: list, ons: list, hoy: dt.date | None = None) ->
     """Escribe cnv/indice/cobertura.json.gz (sin reescribirlo si no cambio) y devuelve el resumen."""
     informe = calcular(almacen, universo, ons, hoy)
     alm.guardar_si_cambio(almacen, "cnv/indice/cobertura.json.gz", alm.comprimir(json.dumps(informe, ensure_ascii=False, separators=(",", ":")).encode("utf-8")))
+    imprimir_huecos(informe)
     return informe["resumen"]
+
+
+HUECOS_EN_LOG = ("sin_documentos", "sin_estados_contables", "estados_contables_sin_cifras", "estado_contable_desactualizado", "documentos_fallidos", "documentos_sin_bajar")
+
+
+def imprimir_huecos(informe: dict) -> None:
+    """Una linea por tipo de hueco con las empresas afectadas (para verlas en el log del workflow sin bajar el informe)."""
+    for codigo in HUECOS_EN_LOG:
+        nombres = [f"{e['empresa']} ({e['cuit']})" for e in informe["emisores"] if codigo in e["huecos"]]
+        if nombres:
+            print(f"HUECO {codigo} [{len(nombres)}]: " + "; ".join(nombres))
