@@ -57,8 +57,8 @@ from . import universo as uni
 from . import financieros as fin
 from . import resumenes as res
 from .descarga import Limites
-from .sincronizar import (TIPOS_DEFECTO, TIPOS_TEXTO, cargar_universo, construir_indice_global, ocr_formularios, reprocesar_escaneados,
-                          sincronizar_empresa)
+from .sincronizar import (GRUPOS_CON_TOPE, TIPOS_DEFECTO, TIPOS_TEXTO, cargar_universo, construir_indice_global, grupos_de_tipos, ocr_formularios,
+                          reprocesar_escaneados, sincronizar_empresa)
 
 
 def _ejecutar(argv=None) -> int:
@@ -70,6 +70,7 @@ def _ejecutar(argv=None) -> int:
     s.add_argument("--fragmento", default="0/1", help="i/n: procesa solo las empresas cuyo orden % n == i (para correr en paralelo)")
     s.add_argument("--tiempo-max", type=int, default=18000, help="segundos; corta limpio y deja el resto para la proxima corrida")
     s.add_argument("--max-docs", type=int, default=None, help="tope de documentos por empresa y por corrida")
+    s.add_argument("--tiempo-volumen", type=int, default=3600, help="segundos que se le dan, por pasada, a prospectos y actas (el volumen): no desplazan a estados contables ni hechos")
     s.add_argument("--solo", default=None, help="CUIT: procesa solo esa empresa")
     s.add_argument("--trabajadores", type=int, default=3)
     s.add_argument("--max-paginas", type=int, default=None, help="tope de paginas de texto por documento (defecto 400, o CNV_MAX_PAGINAS)")
@@ -372,7 +373,12 @@ def _ejecutar(argv=None) -> int:
         return 0
 
     i, n = (int(x) for x in a.fragmento.split("/"))
-    empresas = [e for k, e in enumerate(universo) if k % n == i and (not a.solo or e["cuit"] == a.solo.replace("-", ""))]
+    try:  # los emisores con ONs primero: son los que le importan al asesor; el orden es estable, asi que cada fragmento recibe siempre las mismas empresas
+        con_ons = {o["cuit"] for o in cob.leer_ons() if o["cuit"]}
+    except OSError:
+        con_ons = set()
+    ordenado = sorted(universo, key=lambda e: e["cuit"] not in con_ons)
+    empresas = [e for k, e in enumerate(ordenado) if k % n == i and (not a.solo or e["cuit"] == a.solo.replace("-", ""))]
     tipos = tuple(t.strip() for t in a.tipos.split(",") if t.strip())
     desconocidos = [t for t in tipos if t not in TIPOS_TEXTO]
     if desconocidos:
@@ -383,19 +389,27 @@ def _ejecutar(argv=None) -> int:
     desde = dt.date.fromisoformat(a.desde)
     limite = time.monotonic() + a.tiempo_max
     total = {"nuevos": 0, "fallidos": 0, "pendientes": 0, "empresas_con_error": 0}
-    for e in empresas:
-        if time.monotonic() > limite:
-            print("corte por tiempo: el resto queda para la proxima corrida")
-            break
-        try:
-            r = sincronizar_empresa(almacen, e, desde, tipos, a.trabajadores, a.max_docs, limite, limites)
-        except Exception as error:
-            total["empresas_con_error"] += 1
-            print(f"  {e['empresa']}: ERROR {error}", flush=True)
-            continue
-        for k in ("nuevos", "fallidos", "pendientes"):
-            total[k] += r[k]
-        print(f"  {e['empresa']}: +{r['nuevos']} nuevos, {r['fallidos']} fallidos, {r['pendientes']} pendientes", flush=True)
+    con_error = set()  # una empresa que fallo no se vuelve a intentar en las pasadas siguientes (cuenta una sola vez)
+    for g, grupo in enumerate(grupos_de_tipos(tipos)):
+        # una pasada por grupo de tipos (estados contables, hechos y avisos, prospectos, actas): lo importante se baja primero en TODAS las empresas
+        tope = limite if g < GRUPOS_CON_TOPE else min(limite, time.monotonic() + a.tiempo_volumen)
+        for e in empresas:
+            if e["cuit"] in con_error:
+                continue
+            if time.monotonic() > tope:
+                print(f"corte por tiempo ({', '.join(grupo)}): el resto queda para la proxima corrida")
+                break
+            try:
+                r = sincronizar_empresa(almacen, e, desde, grupo, a.trabajadores, a.max_docs, tope, limites, con_listado=g == 0)
+            except Exception as error:
+                con_error.add(e["cuit"])
+                total["empresas_con_error"] += 1
+                print(f"  {e['empresa']}: ERROR {error}", flush=True)
+                continue
+            for k in ("nuevos", "fallidos", "pendientes"):
+                total[k] += r[k]
+            if g == 0 or r["nuevos"] or r["fallidos"] or r["pendientes"]:
+                print(f"  {e['empresa']}: +{r['nuevos']} nuevos, {r['fallidos']} fallidos, {r['pendientes']} pendientes" + (f" [{', '.join(grupo)}]" if g else ""), flush=True)
     print("TOTAL", total)
     return 0
 

@@ -54,6 +54,23 @@ def banderas_ec(almacen, empresas: list) -> collections.Counter:
     return c
 
 
+def no_es_estado(almacen, empresas: list, max_muestras: int = 40) -> tuple:
+    """(Counter por forma de la descripcion, muestras) de los estados contables que el extractor descarto como `no_es_estado_contable`."""
+    forma, muestras = collections.Counter(), []
+    for e in empresas:
+        fin = leer_financieros(almacen, e["cuit"])["procesados"]
+        for m in alm.leer_indice_empresa(almacen, e["cuit"]):
+            if m.get("t") != "estados_contables" or (fin.get(m["id"]) or {}).get("estado") != "no_es_estado_contable":
+                continue
+            d = m.get("d") or ""
+            clave = ("RELAC" if d.startswith("RELAC") else "NORMA/BALANCE" if d.startswith("NORMA CONTABLE") else d[:25]) + ("|ajeno" if entidad_ajena(m, e) else "|propio")
+            forma[clave] += 1
+            if clave.endswith("propio") and len(muestras) < max_muestras and (m.get("f") or "") >= "2026-01-01":
+                texto = " ".join((alm.leer_texto(almacen, e["cuit"], m["id"]) or "")[:700].split())
+                muestras.append(f"{e['empresa'][:25]} {m['id']}@{m.get('f')} p={m.get('p')} n={m.get('n')} d={d[:110]!r} T={texto[:260]!r}")
+    return forma, muestras
+
+
 def estado_contable(almacen, e: dict, hoy: dt.date) -> dict:
     """Ultimo estado contable del indice vs ultimo con cifras: donde se cae la cadena (indexado -> con texto -> con cifras)."""
     indice = alm.leer_indice_empresa(almacen, e["cuit"])
@@ -79,6 +96,11 @@ def imprimir(almacen, empresas: list, cuits_con_ons: set, desactualizadas: list,
             print(f"DIAG muestra {est} {tipo} {motivo}: " + " ".join(lista))
     for (bandera, est), n in sorted(banderas_ec(almacen, empresas).items(), key=lambda x: -x[1]):
         print(f"DIAG ec_con_texto {n:5d} {bandera:14s} financieros={est}")
+    forma, muestras = no_es_estado(almacen, empresas)
+    for k, n in forma.most_common():
+        print(f"DIAG no_es_ec {n:5d} {k}")
+    for x in muestras:
+        print("DIAG no_es_ec_muestra " + x)
     pe = collections.Counter()
     for (emp, est), n in d["por_empresa"].items():
         pe[emp] += n
