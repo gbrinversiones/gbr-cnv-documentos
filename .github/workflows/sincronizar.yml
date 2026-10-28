@@ -60,7 +60,7 @@ on:
         default: false
 
 concurrency:
-  group: sincronizar-cnv
+  group: ${{ github.event.inputs.solo_diagnostico == 'true' && 'sincronizar-cnv-diagnostico' || 'sincronizar-cnv' }}   # el diagnostico solo lee: no espera a la sincronizacion
   cancel-in-progress: false
 
 jobs:
