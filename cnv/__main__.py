@@ -120,6 +120,9 @@ def _ejecutar(argv=None) -> int:
     co = sub.add_parser("cobertura")
     co.add_argument("--ons", default="data/ons.csv", help="CSV de ONs con el CUIT de cada emisor")
     co.add_argument("--hoy", default=None, help="AAAA-MM-DD (para reproducir un informe)")
+    dg = sub.add_parser("diagnostico")
+    dg.add_argument("--ons", default="data/ons.csv")
+    dg.add_argument("--en-vivo", action="store_true", help="consulta tambien la ultima fecha de estado contable publicada en la CNV de las desactualizadas")
     pf = sub.add_parser("perfiles")
     pf.add_argument("--ons", default="data/ons.csv", help="CSV de ONs con el CUIT de cada emisor")
     pf.add_argument("--hoy", default=None, help="AAAA-MM-DD (para reproducir un informe)")
@@ -251,6 +254,19 @@ def _ejecutar(argv=None) -> int:
     if a.cmd == "cobertura":
         r = cob.construir(almacen, universo, cob.leer_ons(a.ons), dt.date.fromisoformat(a.hoy) if a.hoy else None)
         print("TOTAL", json.dumps(r, ensure_ascii=False))
+        return 0
+
+    if a.cmd == "diagnostico":
+        from . import diagnostico as dgn
+        ons = cob.leer_ons(a.ons)
+        informe = cob.calcular(almacen, universo, ons)
+        malas = {x["cuit"] for x in informe["emisores"] if "estado_contable_desactualizado" in x["huecos"] or "sin_estados_contables" in x["huecos"]}
+        vivo = None
+        if a.en_vivo:
+            from .listado import listar, sesion
+            ses = sesion()
+            vivo = lambda c: next((x["fecha"] for x in listar(c, dt.date(2023, 1, 1), ses) if x["tipo"] == "estados_contables"), None)  # noqa: E731
+        dgn.imprimir(almacen, universo, {o["cuit"] for o in ons if o["cuit"]}, [e for e in universo if e["cuit"] in malas], dt.date.today(), vivo)
         return 0
 
     if a.cmd == "series":
