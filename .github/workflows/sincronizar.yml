@@ -75,7 +75,10 @@ jobs:
           cache: pip
       - run: pip install -r requirements.txt
       - name: Diagnostico de documentos fallidos, sin bajar y estados contables desactualizados (solo lectura, con consulta a la CNV)
-        run: python -m cnv diagnostico --en-vivo
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          CNV_MAX_USD: ${{ github.event.inputs.tope_usd || '1' }}
+        run: python -m cnv diagnostico --en-vivo --probar-modelo 8
 
   descargar:
     if: ${{ github.event.inputs.solo_diagnostico != 'true' }}

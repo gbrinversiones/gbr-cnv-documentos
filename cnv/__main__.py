@@ -123,6 +123,7 @@ def _ejecutar(argv=None) -> int:
     co.add_argument("--hoy", default=None, help="AAAA-MM-DD (para reproducir un informe)")
     dg = sub.add_parser("diagnostico")
     dg.add_argument("--ons", default="data/ons.csv")
+    dg.add_argument("--probar-modelo", type=int, default=0, help="vuelve a pedir al modelo (sin guardar) N estados contables descartados como no_es_estado_contable; gasta API (CNV_MAX_USD)")
     dg.add_argument("--en-vivo", action="store_true", help="consulta tambien la ultima fecha de estado contable publicada en la CNV de las desactualizadas")
     pf = sub.add_parser("perfiles")
     pf.add_argument("--ons", default="data/ons.csv", help="CSV de ONs con el CUIT de cada emisor")
@@ -268,6 +269,10 @@ def _ejecutar(argv=None) -> int:
             ses = sesion()
             vivo = lambda c: next((x["fecha"] for x in listar(c, dt.date(2023, 1, 1), ses) if x["tipo"] == "estados_contables"), None)  # noqa: E731
         dgn.imprimir(almacen, universo, {o["cuit"] for o in ons if o["cuit"]}, [e for e in universo if e["cuit"] in malas], dt.date.today(), vivo)
+        if a.probar_modelo and os.environ.get("ANTHROPIC_API_KEY"):
+            import anthropic
+
+            dgn.probar_modelo(almacen, universo, anthropic.Anthropic(timeout=120.0, max_retries=0), a.probar_modelo)
         return 0
 
     if a.cmd == "series":
