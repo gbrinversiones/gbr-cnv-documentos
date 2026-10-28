@@ -58,7 +58,7 @@ from . import financieros as fin
 from . import resumenes as res
 from .descarga import Limites
 from .sincronizar import (GRUPOS_CON_TOPE, TIPOS_DEFECTO, TIPOS_TEXTO, cargar_universo, construir_indice_global, grupos_de_tipos, ocr_formularios,
-                          reprocesar_escaneados, sincronizar_empresa)
+                          ocr_estados_contables, reprocesar_escaneados, sincronizar_empresa)
 
 
 def _ejecutar(argv=None) -> int:
@@ -103,6 +103,11 @@ def _ejecutar(argv=None) -> int:
     sa.add_argument("--hoy", default=None, help="AAAA-MM-DD (para reproducir un informe)")
     sa.add_argument("--anomalias", default=None, metavar="ARCHIVO", help="detecta anomalias contra la corrida anterior, guarda la foto actual y escribe el cuerpo del issue en ARCHIVO (sin anomalias: no lo crea)")
     sa.add_argument("--max-fallidos", type=int, default=30)
+    oe = sub.add_parser("ocr-ec")
+    oe.add_argument("--max-docs", type=int, default=2, help="estados contables escaneados por empresa y por corrida (cada uno tarda minutos)")
+    oe.add_argument("--tiempo-max", type=int, default=6000, help="segundos; corta limpio")
+    oe.add_argument("--solo", default=None, help="CUIT: procesa solo esa empresa")
+    oe.add_argument("--ons", default="data/ons.csv", help="CSV de ONs: solo se leen los emisores que figuran ahi")
     oc = sub.add_parser("ocr")
     oc.add_argument("--max-docs", type=int, default=None, help="tope de documentos por empresa y por corrida")
     oc.add_argument("--tiempo-max", type=int, default=7200)
@@ -124,6 +129,8 @@ def _ejecutar(argv=None) -> int:
     dg = sub.add_parser("diagnostico")
     dg.add_argument("--ons", default="data/ons.csv")
     dg.add_argument("--probar-modelo", type=int, default=0, help="vuelve a pedir al modelo (sin guardar) N estados contables descartados como no_es_estado_contable; gasta API (CNV_MAX_USD)")
+    dg.add_argument("--sin-informe", action="store_true", help="con --probar-modelo: solo las pruebas, sin repetir el informe")
+    dg.add_argument("--estado", default="no_es_estado_contable", help="con --probar-modelo: estado de financieros a re-procesar (sin_cifras, sin_paginas_relevantes, ...)")
     dg.add_argument("--en-vivo", action="store_true", help="consulta tambien la ultima fecha de estado contable publicada en la CNV de las desactualizadas")
     pf = sub.add_parser("perfiles")
     pf.add_argument("--ons", default="data/ons.csv", help="CSV de ONs con el CUIT de cada emisor")
@@ -227,6 +234,27 @@ def _ejecutar(argv=None) -> int:
         print(f"indice global: {construir_indice_global(almacen, universo)} documentos")
         return 0
 
+    if a.cmd == "ocr-ec":
+        os.environ["CNV_OCR"] = "1"
+        try:
+            ocr.comprobar(ocr.configuracion()["idioma"])
+        except ocr.OcrNoDisponible as error:
+            print(f"OCR no disponible ({error}). Instalar tesseract-ocr, tesseract-ocr-spa, poppler-utils y requirements-ocr.txt")
+            return 2
+        con_ons = {o["cuit"] for o in cob.leer_ons(a.ons) if o["cuit"]}          # solo emisores con ONs
+        limite = time.monotonic() + a.tiempo_max
+        total = {"leidos": 0, "sin_texto": 0, "pendientes": 0}
+        for e in universo:
+            if e["cuit"] not in con_ons or (a.solo and e["cuit"] != a.solo.replace("-", "")) or time.monotonic() > limite:
+                continue
+            r = ocr_estados_contables(almacen, e, Limites.desde_entorno(), limite, a.max_docs)
+            for k in total:
+                total[k] += r[k]
+            if r["leidos"] or r["sin_texto"]:
+                print(f"  {e['empresa']}: {r['leidos']} estados contables leidos por OCR, {r['sin_texto']} sin numeros legibles", flush=True)
+        print("TOTAL", total)
+        return 0
+
     if a.cmd == "reintentos":
         if not a.reset:
             print("indicar --reset")
@@ -268,11 +296,12 @@ def _ejecutar(argv=None) -> int:
             from .listado import listar, sesion
             ses = sesion()
             vivo = lambda c: next((x["fecha"] for x in listar(c, dt.date(2023, 1, 1), ses) if x["tipo"] == "estados_contables"), None)  # noqa: E731
-        dgn.imprimir(almacen, universo, {o["cuit"] for o in ons if o["cuit"]}, [e for e in universo if e["cuit"] in malas], dt.date.today(), vivo)
+        if not a.sin_informe:
+            dgn.imprimir(almacen, universo, {o["cuit"] for o in ons if o["cuit"]}, [e for e in universo if e["cuit"] in malas], dt.date.today(), vivo)
         if a.probar_modelo and os.environ.get("ANTHROPIC_API_KEY"):
             import anthropic
 
-            dgn.probar_modelo(almacen, universo, anthropic.Anthropic(timeout=120.0, max_retries=0), a.probar_modelo)
+            dgn.probar_modelo(almacen, universo, anthropic.Anthropic(timeout=120.0, max_retries=0), a.probar_modelo, a.estado)
         return 0
 
     if a.cmd == "series":

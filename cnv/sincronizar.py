@@ -3,11 +3,12 @@ import csv
 import datetime as dt
 import hashlib
 import json
+import os
 import time
 from concurrent.futures import ThreadPoolExecutor
 
 from . import almacen as alm
-from . import avisos_pago, ocr
+from . import avisos_pago, financieros, ocr
 from .descarga import Limites, extraer_pdf, pdfs_de_presentacion, texto_de_presentacion
 from .listado import listar, sesion
 
@@ -16,6 +17,7 @@ TIPOS_TEXTO = ("hechos", "estados_contables", "prospectos", "avisos_pago", "acta
 TIPOS_DEFECTO = TIPOS_TEXTO
 MAX_INTENTOS = 3
 DESDE_CARGA_INICIAL = dt.date(2023, 1, 1)  # historia que se baja de una empresa que todavia no tiene la suya (ver desde_efectivo)
+MAX_PAGINAS_OCR_EC = 80  # paginas que se leen por OCR de un estado contable escaneado (CNV_OCR_MAX_PAGINAS_EC); un balance de 70 paginas tarda ~6 min
 GUARDAR_CADA = 10  # documentos: el indice se guarda de a tandas para que un corte no obligue a rebajar lo ya bajado
 
 
@@ -76,6 +78,18 @@ def grupos_de_tipos(tipos: tuple) -> list:
     return [g for g in [*grupos, resto] if g]
 
 
+MAX_PAGINAS_CARATULA = 3   # (descarga.MAX_PAGINAS_CARATULA) un estado contable de hasta 3 paginas con poco texto es, casi seguro, una caratula de legalizacion
+MAX_CARACTERES_CARATULA = 4000
+MAX_RELECTURAS = 2         # veces que se vuelve a bajar una posible caratula antes de darla por leida
+
+
+def es_posible_caratula(m: dict) -> bool:
+    """Estado contable con texto de <= 3 paginas y casi sin caracteres, bajado antes de que se leyeran los PDF embebidos de las legalizaciones
+    (cnv/descarga.py: pdfs_embebidos). Se vuelve a bajar una vez para reemplazar la caratula por el balance."""
+    return bool(m.get("t") == "estados_contables" and m.get("texto_ok") and not m.get("emb_ok") and m.get("emb_intentos", 0) < MAX_RELECTURAS
+                and 0 < (m.get("p") or 0) <= MAX_PAGINAS_CARATULA and m.get("n") is not None and m["n"] < MAX_CARACTERES_CARATULA)
+
+
 def pendientes_del_indice(indice: list, ya_listados: set, tipos: tuple) -> list:
     """Documentos que el indice conoce pero nunca terminaron de bajarse y YA NO salen en el listado de la ventana pedida: el sync diario solo
     lista los ultimos dias, asi que lo que quedo sin bajar (corte por tiempo, tipos que no se pidieron esa vez, intento fallido) no se
@@ -84,7 +98,7 @@ def pendientes_del_indice(indice: list, ya_listados: set, tipos: tuple) -> list:
     for m in indice:
         if m["id"] in ya_listados or m.get("t") not in tipos or not m.get("u"):
             continue
-        if m.get("intentos", 0) >= MAX_INTENTOS or (m.get("texto_ok") and not m.get("parcial")):
+        if m.get("intentos", 0) >= MAX_INTENTOS or (m.get("texto_ok") and not m.get("parcial") and not es_posible_caratula(m)):
             continue
         salida.append({"doc_id": m["id"], "fecha": m.get("f") or "", "seccion": m.get("s", ""), "tipo": m["t"], "descripcion": m.get("d", ""), "url": m["u"]})
     return salida
@@ -113,6 +127,8 @@ def _procesar(almacen, empresa: dict, d: dict, previo: dict | None, limites: Lim
         return {**previo, "intentos": meta["intentos"], "error": "; ".join(f"{f['archivo']}: {f['motivo']}" for f in fallos)[:120]}
     alm.guardar_texto(almacen, empresa["cuit"], d["doc_id"], r["texto"])
     meta.update({"texto_ok": True, "p": r["paginas"], "n": len(r["texto"]), "archivos": r["archivos"][:3]})
+    if d["tipo"] == "estados_contables":
+        meta["emb_ok"] = True      # ya se miraron los PDF embebidos de las legalizaciones
     # campos opcionales: solo existen cuando hay algo que contar, asi los indices viejos no cambian de forma
     if r.get("truncado"):
         meta["trunc"] = r["truncado"]
@@ -161,6 +177,7 @@ def sincronizar_empresa(almacen, empresa: dict, desde: dt.date, tipos: tuple = T
     if max_docs is not None:
         faltan = faltan[:max_docs]
     nuevos = fallidos = 0
+    releidos = []      # caratulas de legalizacion reemplazadas por el balance embebido
 
     def guardar():
         alm.guardar_indice_empresa(almacen, empresa["cuit"], sorted(por_id.values(), key=lambda m: int(m["id"]), reverse=True))
@@ -175,13 +192,25 @@ def sincronizar_empresa(almacen, empresa: dict, desde: dt.date, tipos: tuple = T
                 for meta in pool.map(tarea, faltan):
                     if meta is None:
                         continue
-                    por_id[meta["id"]] = _fusionar(por_id.get(meta["id"]), meta)
+                    previo = por_id.get(meta["id"])
+                    if previo and es_posible_caratula(previo):    # relectura de una caratula: si falla, se conserva el texto que ya habia
+                        if not meta.get("texto_ok"):
+                            por_id[meta["id"]] = {**previo, "emb_intentos": previo.get("emb_intentos", 0) + 1}
+                            continue
+                        if meta.get("n", 0) > previo.get("n", 0):
+                            releidos.append(meta["id"])
+                    por_id[meta["id"]] = _fusionar(previo, meta)
                     nuevos += 1 if meta.get("texto_ok") else 0
                     fallidos += 0 if meta.get("texto_ok") else 1
                     if (nuevos + fallidos) % GUARDAR_CADA == 0:
                         guardar()  # un corte (timeout del job, red) no pierde lo ya bajado
     finally:
         guardar()
+        if releidos:      # lo que `financieros` concluyo sobre la caratula ya no vale: el texto cambio
+            estado = financieros.leer_financieros(almacen, empresa["cuit"])
+            for doc in releidos:
+                estado["procesados"].pop(doc, None)
+            financieros.guardar_financieros(almacen, empresa["cuit"], estado)
     return {"nuevos": nuevos, "fallidos": fallidos, "pendientes": max(0, len(faltan) - nuevos - fallidos)}
 
 
@@ -269,6 +298,66 @@ def ocr_formularios(almacen, empresa: dict, limites: Limites | None = None, hast
             por_id[m["id"]] = nuevo
             if (leidos + sin_texto) % GUARDAR_CADA == 0:
                 guardar()
+    finally:
+        guardar()
+    return {"leidos": leidos, "sin_texto": sin_texto, "pendientes": len(cola) - leidos - sin_texto}
+
+
+def ocr_estados_contables(almacen, empresa: dict, limites: Limites | None = None, hasta_t: float | None = None, max_docs: int | None = None) -> dict:
+    """Estados contables que son imagen (financieros los marco `escaneado`: sin texto util para extraer cifras) y todavia son mas nuevos que el ultimo
+    periodo con cifras de la empresa: vuelve a bajar el PDF, lo lee con tesseract descartando los numeros de baja confianza y guarda el texto en una
+    ruta NUEVA (cnv/texto/{cuit}/{doc_id}.ocr.txt.gz; el original no se toca). Marca el documento `ocr_ec` y `financieros` lo procesa aparte, con
+    compuertas extra (balance que cuadra, cita literal, cierre y unidad en el texto) y el periodo queda `ocr: true`. Los mas nuevos primero.
+    Devuelve {"leidos","sin_texto","pendientes"} o {"error": ...}."""
+    if not ocr.activado():
+        return {"leidos": 0, "sin_texto": 0, "pendientes": 0, "error": "CNV_OCR no esta activado"}
+    cfg = ocr.configuracion()
+    try:
+        ocr.comprobar(cfg["idioma"])
+    except ocr.OcrNoDisponible as error:
+        return {"leidos": 0, "sin_texto": 0, "pendientes": 0, "error": str(error)}
+    indice = alm.leer_indice_empresa(almacen, empresa["cuit"])
+    por_id = {m["id"]: m for m in indice}
+    fin = financieros.leer_financieros(almacen, empresa["cuit"])
+    ultima = max((p.get("fecha_presentacion") or "" for p in fin["periodos"]), default="")
+    cola = [m for m in sorted(indice, key=lambda m: (m.get("f") or "", int(m["id"])), reverse=True)
+            if m.get("t") == "estados_contables" and m.get("u") and not m.get("ocr_ec") and not m.get("ocr_ec_intentado")
+            and (m.get("f") or "") > ultima and not financieros.entidad_ajena(m, empresa)
+            and ((fin["procesados"].get(m["id"]) or {}).get("estado") == "escaneado"
+                 or ((fin["procesados"].get(m["id"]) or {}).get("estado") in ("sin_paginas_relevantes", "sin_cifras")
+                     and financieros.texto_ilegible(alm.leer_texto(almacen, empresa["cuit"], m["id"]) or "")))]
+    if max_docs is not None:
+        cola = cola[:max_docs]
+    leidos = sin_texto = 0
+    paginas_max = int(os.environ.get("CNV_OCR_MAX_PAGINAS_EC") or MAX_PAGINAS_OCR_EC)
+
+    def guardar():
+        alm.guardar_indice_empresa(almacen, empresa["cuit"], sorted(por_id.values(), key=lambda x: int(x["id"]), reverse=True))
+
+    try:
+        for m in cola:
+            if hasta_t and time.monotonic() > hasta_t:
+                break
+            try:
+                pdfs = _con_reintentos(lambda: pdfs_de_presentacion(m["u"], sesion(), limites, hasta_t), intentos=2)["pdfs"]
+            except Exception:  # la CNV no respondio: no se marca como intentado, se reintenta en la proxima corrida
+                continue
+            partes, paginas, ilegibles, numericas = [], 0, 0, 0
+            for nombre, pdf in pdfs:
+                total = extraer_pdf(pdf, 1)["paginas"]
+                o = ocr.ocr_pdf_confiable(pdf, total, paginas_max, cfg["idioma"], max(cfg["dpi"], 300), ocr.confianza_minima())
+                partes.append(o["texto"])
+                paginas, numericas, ilegibles = paginas + o["paginas_ocr"], numericas + o["numericas"], ilegibles + o["ilegibles"]
+            nuevo = dict(m)
+            if numericas - ilegibles > 0:
+                alm.guardar_texto_ocr(almacen, empresa["cuit"], m["id"], "\n\n".join(partes))
+                nuevo.update({"ocr_ec": paginas, "ocr_ec_numeros": numericas - ilegibles, "ocr_ec_ilegibles": ilegibles})
+                leidos += 1
+            else:
+                nuevo.update({"ocr_ec_intentado": True, "ocr_ec_ilegibles": ilegibles})
+                sin_texto += 1
+            por_id[m["id"]] = nuevo
+            guardar()          # cada documento tarda minutos: se guarda de a uno
     finally:
         guardar()
     return {"leidos": leidos, "sin_texto": sin_texto, "pendientes": len(cola) - leidos - sin_texto}

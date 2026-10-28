@@ -33,7 +33,7 @@ DESCRIPCIONES = {
         "periodo": "fecha de cierre del periodo", "tipo": "anual, trimestral o semestral", "acumulado": "true si las cifras de resultados son acumuladas desde el inicio del ejercicio",
         "balance": "consolidado, individual o desconocido", "moneda": "moneda en que se expresa el estado contable", "unidad": "unidad declarada (ej. miles de pesos)",
         "escala": "factor de la unidad: 1, 1000 o 1000000; valor real = cifra x escala", "fecha_presentacion": "fecha en que se presento el documento",
-        "periodo_verificado": "true si la fecha de cierre figura en el texto del documento", "balance_coherente": "true si activo = pasivo + patrimonio (tolerancia 1%); vacio = no se pudo comprobar",
+        "periodo_verificado": "true si la fecha de cierre figura en el texto del documento", "ocr": "true si las cifras salieron de una lectura OCR del PDF escaneado (solo si el balance cuadra y la cita figura en el texto); si no, false", "balance_coherente": "true si activo = pasivo + patrimonio (tolerancia 1%); vacio = no se pudo comprobar",
         "ventas": "ingresos por ventas. " + _NUM, "resultado_operativo": "resultado operativo. " + _NUM, "resultado_neto": "resultado neto del periodo. " + _NUM,
         "activo_total": "activo total. " + _NUM, "pasivo_total": "pasivo total. " + _NUM, "patrimonio_neto": "patrimonio neto. " + _NUM,
         "deuda_financiera": "deuda financiera (prestamos y obligaciones negociables). " + _NUM, "efectivo": "efectivo y equivalentes. " + _NUM,
@@ -82,7 +82,7 @@ DESCRIPCIONES = {
     },
 }
 COLUMNAS = {
-    "financieros.csv": ["cuit", "empresa", "doc", "periodo", "tipo", "acumulado", "balance", "moneda", "unidad", "escala", "fecha_presentacion", "periodo_verificado", "balance_coherente",
+    "financieros.csv": ["cuit", "empresa", "doc", "periodo", "tipo", "acumulado", "balance", "moneda", "unidad", "escala", "fecha_presentacion", "periodo_verificado", "balance_coherente", "ocr",
                         *CIFRAS, "cifras_sospechosas", *rat.ENTRADAS, "ratios_sin_calcular"],
     "condiciones.csv": ["cuit", "empresa", "doc", "n", "tipo_documento", "fecha_presentacion", "url", "ticker", "tickers", *cond.CAMPOS, "ambiguo"],
     "avisos_pago.csv": ["cuit", "empresa", "doc", "fecha", "emisor", "fuente", "serie_cnv", *[c for c in avp.CAMPOS if c != "emisor"], "valor_residual_unidad", "tasa_unidad", "ambiguo"],
@@ -135,7 +135,8 @@ def filas_financieros(almacen, empresas: list) -> list:
             r = rat.ratios_de_periodo(p, malas)
             f = {"cuit": e["cuit"], "empresa": e["empresa"], "doc": p["doc"], "periodo": p.get("periodo"), "tipo": p.get("tipo"), "acumulado": p.get("acumulado"),
                  "balance": p.get("balance", "desconocido"), "moneda": p.get("moneda"), "unidad": p.get("unidad"), "escala": p.get("escala"),
-                 "fecha_presentacion": p.get("fecha_presentacion"), "periodo_verificado": p.get("periodo_verificado"), "balance_coherente": p.get("balance_coherente")}
+                 "fecha_presentacion": p.get("fecha_presentacion"), "periodo_verificado": p.get("periodo_verificado"), "balance_coherente": p.get("balance_coherente"),
+                 "ocr": bool(p.get("ocr"))}
             f.update({c: r["insumos"][c]["valor"] if c in r["insumos"] and not r["insumos"][c].get("derivado") else None for c in CIFRAS})   # un total derivado no es una cifra del documento
             f["cifras_sospechosas"] = r.get("sospechosas")
             f.update(r["ratios"])

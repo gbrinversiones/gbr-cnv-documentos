@@ -51,12 +51,16 @@ on:
         default: false
 
       solo_diagnostico:
-        description: "true = no descarga ni procesa nada: solo corre el job `diagnostico` (lectura, sin modelo) y imprime lineas DIAG en el log. Default false"
+        description: "true = no descarga ni procesa nada: solo corre el job `diagnostico` (lectura, y unas pocas llamadas al modelo) y imprime lineas DIAG en el log. Default false"
+        type: boolean
+        default: false
+      solo_ocr_ec:
+        description: "true = no descarga ni procesa nada: solo corre el job `validar_ocr_ec` (OCR de estados contables escaneados de emisores con ONs + financieros con tope chico). Default false"
         type: boolean
         default: false
 
 concurrency:
-  group: sincronizar-cnv
+  group: ${{ github.event.inputs.solo_diagnostico == 'true' && 'sincronizar-cnv-diagnostico' || 'sincronizar-cnv' }}   # el diagnostico solo lee: no espera a la sincronizacion
   cancel-in-progress: false
 
 jobs:
@@ -78,10 +82,46 @@ jobs:
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           CNV_MAX_USD: ${{ github.event.inputs.tope_usd || '1' }}
-        run: python -m cnv diagnostico --en-vivo --probar-modelo 8
+        run: |
+          python -m cnv diagnostico --en-vivo
+          python -m cnv diagnostico --sin-informe --probar-modelo 4 --estado sin_cifras
+          python -m cnv diagnostico --sin-informe --probar-modelo 4 --estado sin_paginas_relevantes
+
+  validar_ocr_ec:
+    # Validacion acotada del OCR de estados contables escaneados (emisores con ONs): lee unos pocos con tesseract, los pasa por `financieros` (tope
+    # chico) y muestra el resultado. No toca nada mas. Se dispara a mano con solo_ocr_ec = true.
+    if: ${{ github.event.inputs.solo_ocr_ec == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 170
+    env:
+      GCS_BUCKET: ${{ vars.GCS_BUCKET }}
+      GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      CNV_MAX_USD: ${{ github.event.inputs.tope_usd || '1' }}
+      CNV_OCR_CONFIANZA: "80"
+      CNV_OCR_MAX_PAGINAS_EC: ${{ vars.CNV_OCR_MAX_PAGINAS_EC || '80' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Instalar tesseract (espanol) y poppler
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y tesseract-ocr tesseract-ocr-spa poppler-utils
+      - run: pip install -r requirements.txt -r requirements-ocr.txt
+      - name: Estados contables pendientes del indice (incluye las caratulas de legalizacion con el balance embebido)
+        run: python -m cnv sync --desde "$(date -u -d '30 days ago' +%F)" --tipos estados_contables --tiempo-max 2400
+      - name: OCR de estados contables escaneados (solo emisores con ONs)
+        run: python -m cnv ocr-ec --max-docs 1 --tiempo-max 5400
+      - name: Cifras de los estados (texto nuevo y leidos por OCR; tope de documentos chico)
+        run: python -m cnv financieros --max 80 --tiempo-max 1500
+      - name: Cobertura
+        run: python -m cnv cobertura
 
   descargar:
-    if: ${{ github.event.inputs.solo_diagnostico != 'true' }}
+    if: ${{ github.event.inputs.solo_diagnostico != 'true' && github.event.inputs.solo_ocr_ec != 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 345
     strategy:
@@ -111,7 +151,7 @@ jobs:
   # idioma espanol, poppler) y es lento; si falla (apt caido, sin tesseract) no frena nada: continue-on-error.
   ocr:
     needs: descargar
-    if: ${{ always() && github.event.inputs.solo_diagnostico != 'true' }}
+    if: ${{ always() && github.event.inputs.solo_diagnostico != 'true' && github.event.inputs.solo_ocr_ec != 'true' }}
     continue-on-error: true
     runs-on: ubuntu-latest
     timeout-minutes: 150
@@ -133,10 +173,17 @@ jobs:
       - run: pip install -r requirements.txt -r requirements-ocr.txt
       - name: OCR de documentos escaneados (max 30 por empresa)
         run: python -m cnv ocr --max-docs 30 --tiempo-max 6000
+      # Estados contables que son imagen, de emisores con ONs: lectura con confianza >= 80 (lo dudoso queda [ilegible]); `financieros` los procesa despues con
+      # compuertas extra y marca el periodo `ocr: true`. Cada uno tarda minutos: pocos por empresa y por corrida.
+      - name: OCR de estados contables escaneados (emisores con ONs; max 2 por empresa)
+        continue-on-error: true
+        env:
+          CNV_OCR_CONFIANZA: "80"
+        run: python -m cnv ocr-ec --max-docs 2 --tiempo-max 5400
 
   indice:
     needs: [descargar, ocr]
-    if: ${{ always() && github.event.inputs.solo_diagnostico != 'true' }}
+    if: ${{ always() && github.event.inputs.solo_diagnostico != 'true' && github.event.inputs.solo_ocr_ec != 'true' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read

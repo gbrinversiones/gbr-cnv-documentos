@@ -116,9 +116,10 @@ def imprimir(almacen, empresas: list, cuits_con_ons: set, desactualizadas: list,
         print(f"DIAG ec {e['empresa'][:38]:38s} idx={r['ec_indexados']} ultimo_idx={r['ultimo_ec_indexado']} periodo_cifras={r['ultimo_periodo_con_cifras']}{vivo} :: " + " ".join(r["recientes"]))
 
 
-def probar_modelo(almacen, empresas: list, cliente, cuantos: int) -> None:
-    """Vuelve a pedirle al modelo (SIN guardar nada) unos estados contables descartados como `no_es_estado_contable`, uno por empresa,
-    e imprime que contesta y que paginas recibio: sirve para saber si el descarte es del documento o del extractor. Gasta ~US$ 0,01 por documento."""
+def probar_modelo(almacen, empresas: list, cliente, cuantos: int, estado: str = "no_es_estado_contable") -> None:
+    """Vuelve a procesar (SIN guardar nada) unos estados contables que `financieros` dejo en `estado` (no_es_estado_contable, sin_cifras,
+    sin_paginas_relevantes...), uno por empresa y propios, e imprime que pasa: sirve para saber si el descarte es del documento o del extractor.
+    Gasta ~US$ 0,01 por documento (sin_paginas_relevantes no llama al modelo)."""
     from . import financieros as f
     vistos = set()
     for e in empresas:
@@ -126,17 +127,21 @@ def probar_modelo(almacen, empresas: list, cliente, cuantos: int) -> None:
             break
         fin = leer_financieros(almacen, e["cuit"])["procesados"]
         for m in sorted(alm.leer_indice_empresa(almacen, e["cuit"]), key=lambda m: m.get("f") or "", reverse=True):
-            if m.get("t") != "estados_contables" or (fin.get(m["id"]) or {}).get("estado") != "no_es_estado_contable" or entidad_ajena(m, e):
+            if m.get("t") != "estados_contables" or (fin.get(m["id"]) or {}).get("estado") != estado or entidad_ajena(m, e):
                 continue
             if not (m.get("d") or "").startswith("NORMA CONTABLE") or e["cuit"] in vistos:
                 continue
             texto = alm.leer_texto(almacen, e["cuit"], m["id"]) or ""
-            recorte, paginas = f.armar_recorte(texto)
+            paginas = f.dividir_paginas(texto)
+            recorte, elegidas = f.armar_recorte(texto)
             try:
-                r = f.extraer_con_claude(recorte, cliente)
-                r = {k: v for k, v in r.items() if k != "cifras"} | {"n_cifras": len(r.get("cifras") or [])}
+                r = f.procesar_texto(texto, cliente)
+                motivos = collections.Counter(d.get("motivo") for d in r.get("descartadas") or [])
+                campos = [f"{d.get('campo')}:{d.get('motivo')}" for d in (r.get("descartadas") or [])][:6]
+                r = {"estado": r["estado"], "periodo": r.get("periodo"), "tipo": r.get("tipo"), "cifras": len(r.get("cifras") or {}), "descartadas": dict(motivos), "ejemplos": campos}
             except Exception as error:
                 r = {"error": f"{type(error).__name__}: {error}"[:200]}
-            print(f"DIAG modelo {e['empresa'][:25]} {m['id']}@{m.get('f')} paginas={paginas} recorte={len(recorte)} -> {r}")
+            muestra = " | ".join(" ".join(t.split())[:90] for _, t in paginas[:3])
+            print(f"DIAG modelo[{estado}] {e['empresa'][:25]} {m['id']}@{m.get('f')} paginas={len(paginas)} chars={len(texto)} elegidas={elegidas} recorte={len(recorte)} -> {r} :: {muestra}")
             vistos.add(e["cuit"])
             break

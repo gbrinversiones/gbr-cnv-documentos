@@ -147,10 +147,20 @@ def dividir_paginas(texto: str) -> list:
     return [(int(partes[i]), partes[i + 1].strip()) for i in range(1, len(partes) - 1, 2)]
 
 
+_RE_BASURA = re.compile(r"(?:^|\s)(?:/i?\d+|[\x00-\x08\x0b-\x1f])(?=\s|$)")
+
+
+def texto_ilegible(texto: str) -> bool:
+    """True si el "texto" del PDF es basura de fuentes sin mapa a Unicode: identificadores de glifo ("/i255 /2/3/4") o caracteres de control. Hay texto pero
+    no se puede leer: se trata como una imagen (OCR)."""
+    palabras = len(texto.split())
+    return palabras >= 50 and len(_RE_BASURA.findall(texto)) / palabras > 0.25
+
+
 def texto_util(texto: str) -> bool:
-    """False si el PDF es una imagen escaneada o casi no tiene texto (promedio < 150 caracteres por pagina)."""
+    """False si el PDF es una imagen escaneada o casi no tiene texto (promedio < 150 caracteres por pagina) o su texto es ilegible (ver texto_ilegible)."""
     paginas = dividir_paginas(texto)
-    if not paginas:
+    if not paginas or texto_ilegible(texto):
         return False
     util = sum(len(re.sub(r"\s", "", t)) for _, t in paginas)
     digitos = sum(c.isdigit() for _, t in paginas for c in t)
@@ -388,8 +398,29 @@ def extraer_con_claude(recorte: str, cliente) -> dict:
     return json.loads(bloque.text)
 
 
-def procesar_texto(texto: str, cliente) -> dict:
-    """Resultado de un documento: {"estado": ..., y si estado == "ok": periodo, tipo, acumulado, moneda, unidad, escala, cifras, descartadas}."""
+def rechazo_ocr(r: dict, cifras: dict, texto: str, unidad: str):
+    """None si un periodo leido por OCR pasa todas las compuertas; si no, el motivo. Un digito mal leido no debe entrar a la base ni siquiera marcado:
+    el balance tiene que CUADRAR (activo = pasivo + patrimonio) con las tres cifras, el cierre y la unidad tienen que figurar en el texto, y los
+    corrientes no pueden superar a sus totales. La cita literal ya se exigio en `verificar_cifras`."""
+    coherente = _coherencia_balance(cifras)
+    if coherente is None:
+        return "balance_incompleto"
+    if not coherente:
+        return "balance_no_cuadra"
+    if not periodo_en_texto(texto, r["periodo"]):
+        return "periodo_no_figura"
+    if not (unidad and normalizar(unidad) in normalizar(texto)):
+        return "unidad_no_figura"
+    for corriente, total in (("activo_corriente", "activo_total"), ("pasivo_corriente", "pasivo_total")):
+        if corriente in cifras and cifras[corriente]["valor"] > cifras[total]["valor"] * 1.01:
+            return "corriente_mayor_que_total"
+    return None
+
+
+def procesar_texto(texto: str, cliente, origen: str = "texto") -> dict:
+    """Resultado de un documento: {"estado": ..., y si estado == "ok": periodo, tipo, acumulado, moneda, unidad, escala, cifras, descartadas}.
+    `origen="ocr"`: el texto salio de un OCR con confianza (cnv/ocr.py); ademas de la verificacion de siempre pasa por `rechazo_ocr` y el periodo
+    queda marcado `ocr: True`. Lo que no pasa es {"estado": "ocr_rechazado", "motivo": ...} y no se guarda ninguna cifra."""
     if not texto_util(texto):
         return {"estado": "escaneado"}
     recorte, paginas = armar_recorte(texto)
@@ -404,6 +435,10 @@ def procesar_texto(texto: str, cliente) -> dict:
     cifras, descartadas = verificar_cifras(texto, r.get("cifras"), unidad)
     if not cifras:
         return {"estado": "sin_cifras", "descartadas": descartadas}
+    if origen == "ocr":
+        motivo = rechazo_ocr(r, cifras, texto, unidad)
+        if motivo:
+            return {"estado": "ocr_rechazado", "motivo": motivo, "ocr": True}
     return {
         "estado": "ok", "periodo": r["periodo"], "tipo": r["tipo"], "acumulado": bool(r.get("acumulado")),
         "moneda": str(r.get("moneda") or ""), "unidad": unidad, "escala": factor_unidad(unidad),
@@ -411,6 +446,7 @@ def procesar_texto(texto: str, cliente) -> dict:
         "unidad_verificada": bool(unidad) and normalizar(unidad) in normalizar(texto),
         "balance_coherente": _coherencia_balance(cifras),
         "paginas_enviadas": paginas, "cifras": cifras, "descartadas": descartadas,
+        **({"ocr": True} if origen == "ocr" else {}),
     }
 
 
@@ -479,12 +515,26 @@ def tipo_balance(meta: dict) -> str:
     return "consolidado" if t.startswith("consol") else "individual" if t.startswith(("indiv", "separ")) else "desconocido"
 
 
+def ya_procesado_ocr(estado: dict, doc_id: str) -> bool:
+    """El texto OCR de este documento ya se envio al modelo con el extractor vigente (o agoto los intentos de un error)."""
+    p = estado["procesados"].get(doc_id)
+    if not p:
+        return False
+    if p.get("estado") == "error":
+        return p.get("intentos", 0) >= MAX_INTENTOS
+    return bool(p.get("ocr")) and p.get("v") == VERSION_EXTRACTOR
+
+
 def registrar(estado: dict, empresa: dict, meta: dict, resultado: dict) -> None:
     """Anota el resultado de un documento y reemplaza los periodos que ese documento habia producido."""
     doc_id = meta["id"]
     previo = estado["procesados"].get(doc_id, {})
     estado["periodos"] = [p for p in estado["periodos"] if p.get("doc") != doc_id]
     marca = {"v": VERSION_EXTRACTOR, "estado": resultado["estado"], "fecha": dt.date.today().isoformat()}
+    if resultado.get("ocr"):
+        marca["ocr"] = True                  # leido por OCR: no se repite hasta que cambie el extractor
+        if resultado.get("motivo"):
+            marca["motivo"] = resultado["motivo"]
     if resultado["estado"] == "error":
         marca["intentos"] = previo.get("intentos", 0) + 1
         marca["error"] = resultado.get("error", "")[:120]
@@ -493,9 +543,15 @@ def registrar(estado: dict, empresa: dict, meta: dict, resultado: dict) -> None:
             "doc": doc_id, "empresa": empresa["empresa"], "fecha_presentacion": meta.get("f"), "url": meta.get("u"), "balance": tipo_balance(meta),
             **{k: resultado[k] for k in ("periodo", "tipo", "acumulado", "moneda", "unidad", "escala", "periodo_verificado",
                                           "unidad_verificada", "balance_coherente", "cifras", "descartadas")},
+            **({"ocr": True} if resultado.get("ocr") else {}),   # cifras leidas por OCR (solo si paso las compuertas de `rechazo_ocr`)
         })
     estado["procesados"][doc_id] = marca
     estado["periodos"].sort(key=lambda p: (p["periodo"], int(p["doc"])), reverse=True)
+
+
+def gana(nuevo: dict, previo: dict) -> bool:
+    """De dos periodos con la misma clave queda el del texto del PDF antes que el leido por OCR; entre iguales, el documento mas nuevo."""
+    return (not nuevo.get("ocr"), int(nuevo["doc"])) > (not previo.get("ocr"), int(previo["doc"]))
 
 
 def construir_indice_financieros(almacen, empresas: list) -> int:
@@ -505,13 +561,15 @@ def construir_indice_financieros(almacen, empresas: list) -> int:
         vistos = {}
         for p in leer_financieros(almacen, e["cuit"])["periodos"]:
             clave = (p["periodo"], p["tipo"], p["acumulado"], p.get("balance", "desconocido"), moneda_canonica(p.get("moneda")))   # consolidado en USD y en ARS del mismo cierre son dos filas
-            if clave not in vistos or int(p["doc"]) > int(vistos[clave]["doc"]):
+            if clave not in vistos or gana(p, vistos[clave]):
                 vistos[clave] = p
         for p in vistos.values():
             fila = {"cuit": e["cuit"], "empresa": e["empresa"], "periodo": p["periodo"], "tipo": p["tipo"], "acumulado": p["acumulado"], "balance": p.get("balance", "desconocido"),
                     "moneda": p["moneda"], "unidad": p["unidad"], "escala": p["escala"], "doc": p["doc"], "fecha": p.get("fecha_presentacion"),
                     "periodo_verificado": p["periodo_verificado"], "balance_coherente": p["balance_coherente"]}
             fila.update({c: p["cifras"][c]["valor"] if c in p["cifras"] else None for c in CAMPOS})
+            if p.get("ocr"):
+                fila["ocr"] = True       # solo cuando existe: los consumidores avisan "cifra leida por OCR"
             filas.append(fila)
     filas.sort(key=lambda f: (f["periodo"], f["cuit"]), reverse=True)
     alm.guardar_si_cambio(almacen, "cnv/indice/financieros.json.gz", alm.comprimir(json.dumps(filas, ensure_ascii=False, separators=(",", ":")).encode("utf-8")))
@@ -529,6 +587,8 @@ def candidatos(almacen, empresas: list, completar: bool = False, reextraer_sin_r
             # un documento leido por OCR no se usa para cifras: un digito mal leido igual "verificaria" contra su propia cita
             if m.get("t") == "estados_contables" and m.get("texto_ok") and not m.get("ocr") and not ya_procesado(estado, m["id"], completar, reextraer):
                 salida.append((e, m))
+            elif m.get("t") == "estados_contables" and m.get("ocr_ec") and not ya_procesado_ocr(estado, m["id"]):
+                salida.append((e, m))      # leido por OCR con confianza (cnv/sincronizar.py: ocr_estados_contables)
     salida.sort(key=lambda x: (x[1].get("f") or "", int(x[1]["id"])), reverse=True)
     salida.sort(key=lambda x: x[0]["cuit"] not in prioridad)   # estable: dentro de cada grupo siguen los mas nuevos primero
     return salida
@@ -543,13 +603,14 @@ def ejecutar(almacen, empresas: list, cliente, max_docs: int = 150, hasta_t: flo
     estados = {}
 
     def trabajar(e, m):
-        texto = alm.leer_texto(almacen, e["cuit"], m["id"])
+        por_ocr = bool(m.get("ocr_ec"))
+        texto = alm.leer_texto_ocr(almacen, e["cuit"], m["id"]) if por_ocr else alm.leer_texto(almacen, e["cuit"], m["id"])
         if not texto:
             return None
         if entidad_ajena(m, e):
             return conc.Res({"estado": "otra_entidad"}, llamo=False)
         try:
-            resultado = procesar_texto(texto, cliente)
+            resultado = procesar_texto(texto, cliente, origen="ocr" if por_ocr else "texto")
             return conc.Res(resultado, llamo=resultado["estado"] not in ("escaneado", "sin_paginas_relevantes"))
         except Exception as error:  # red, API o JSON invalido: no se marca como procesado, se reintenta (hasta MAX_INTENTOS)
             if conc.es_error_de_cuenta(error):    # saldo / clave / limite sostenido: no es del documento, no cuenta intento
@@ -565,8 +626,8 @@ def ejecutar(almacen, empresas: list, cliente, max_docs: int = 150, hasta_t: flo
         total["procesados"] += 1
         total["errores"] += resultado["estado"] == "error"
         total["ok"] += resultado["estado"] == "ok"
-        total["saltados"] += resultado["estado"] in ("escaneado", "sin_paginas_relevantes", "otra_entidad")
-        print(f"  {e['empresa']} #{m['id']}: " + ("otra_entidad (balance de una vinculada)" if resultado["estado"] == "otra_entidad" else resultado["estado"]), flush=True)
+        total["saltados"] += resultado["estado"] in ("escaneado", "sin_paginas_relevantes", "otra_entidad", "ocr_rechazado")
+        print(f"  {e['empresa']} #{m['id']}: " + ("otra_entidad (balance de una vinculada)" if resultado["estado"] == "otra_entidad" else resultado["estado"] + (f" ({resultado['motivo']})" if resultado.get("motivo") else "") + (" [OCR]" if resultado.get("ocr") else "")), flush=True)
 
     r = conc.ejecutar_lote(pend, trabajar, confirmar, max_docs, hasta_t, n_hilos)
     if r["corte"]:

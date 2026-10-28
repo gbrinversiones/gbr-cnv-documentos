@@ -78,7 +78,7 @@ def frases_estado_contable(f: dict, periodo_fuente: dict | None) -> list:
     moneda = MONEDA.get(moneda_canonica(f.get("moneda")), f"en {f.get('moneda')}" if f.get("moneda") else "en moneda no informada")
     balance = BALANCE.get(f.get("balance"), "de tipo no informado")
     salida = [_frase("estado_contable", f"Su último estado contable con cifras verificadas es del período {TIPO_PERIODO.get(f.get('tipo'), f.get('tipo') or '')} cerrado el {fecha(f['periodo'])}, "
-                                         f"balance {balance}, {moneda} (documento {doc} de la CNV).", [doc])]
+                                         f"balance {balance}, {moneda} (documento {doc} de la CNV)." + (" Las cifras fueron leídas por OCR de un PDF escaneado (el balance cuadra y cada cifra tiene cita), por lo que pueden tener errores de lectura." if (periodo_fuente or {}).get("ocr") else ""), [doc])]
     cifras = (periodo_fuente or {}).get("cifras") or {}
     unidad = f.get("unidad") or "unidad no informada"
     partes = [f"{nombre.lower()} {num(cifras[campo]['valor'], 0 if float(cifras[campo]['valor']).is_integer() else 2)}" for campo, nombre in CIFRAS if campo in cifras and isinstance(cifras[campo].get("valor"), (int, float))]

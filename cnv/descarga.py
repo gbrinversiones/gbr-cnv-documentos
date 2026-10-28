@@ -143,17 +143,42 @@ def descargar_bytes(guid: str, s=None, max_bytes: int = 80_000_000, intentos: in
     raise ultimo
 
 
+MAX_PAGINAS_CARATULA = 3  # una legalizacion de un consejo profesional es una caratula de 1-2 paginas
+
+
+def pdfs_embebidos(pdf: bytes) -> list:
+    """[(nombre, bytes)] de los PDF embebidos en un PDF corto. Los consejos profesionales (Mendoza, Salta, ...) legalizan el balance con una
+    CARATULA de una pagina que lleva el balance original como archivo adjunto del PDF: sin esto el "texto" del estado contable era solo la
+    caratula. Un PDF largo o sin adjuntos devuelve []."""
+    try:
+        from pypdf import PdfReader
+
+        lector = PdfReader(io.BytesIO(pdf))
+        if len(lector.pages) > MAX_PAGINAS_CARATULA:
+            return []
+        return [(nombre, datos) for nombre, lista in lector.attachments.items() for datos in lista
+                if datos[:4] == b"%PDF" and len(datos) <= 80_000_000]
+    except Exception:  # PDF roto, cifrado o con adjuntos mal formados: se queda con el PDF tal cual
+        return []
+
+
 def pdfs_de(contenido: bytes) -> list:
-    """[(nombre, bytes)] de PDFs: el propio contenido o los PDFs dentro de un ZIP."""
+    """[(nombre, bytes)] de PDFs: el propio contenido o los PDFs dentro de un ZIP. Una caratula de legalizacion se reemplaza por el PDF que lleva embebido."""
     if contenido[:4] == b"%PDF":
-        return [("documento.pdf", contenido)]
-    if contenido[:4] == _ZIP:
+        base = [("documento.pdf", contenido)]
+    elif contenido[:4] == _ZIP:
         try:
             with zipfile.ZipFile(io.BytesIO(contenido)) as z:
-                return [(n, z.read(n)) for n in z.namelist() if n.lower().endswith(".pdf")]
+                base = [(n, z.read(n)) for n in z.namelist() if n.lower().endswith(".pdf")]
         except (zipfile.BadZipFile, NotImplementedError, RuntimeError, EOFError, OSError):
             return []  # ZIP corrupto, con cifrado o con compresion no soportada
-    return []
+    else:
+        return []
+    salida = []
+    for nombre, pdf in base:
+        embebidos = pdfs_embebidos(pdf)
+        salida.extend(embebidos or [(nombre, pdf)])
+    return salida
 
 
 def texto_de_docx(contenido: bytes) -> str:
