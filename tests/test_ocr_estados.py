@@ -215,3 +215,112 @@ def test_ratios_exportar_y_perfil_informan_que_las_cifras_son_de_ocr(tmp_path):
     frases = perfiles.frases_estado_contable({**fila, "ratios": fila["ratios"], "motivos": fila["motivos"]}, p)
     assert "leídas por OCR" in frases[0]["texto"]
     assert "leídas por OCR" not in perfiles.frases_estado_contable(ratios.ratios_de_periodo({**p, "ocr": False}), {**p, "ocr": False})[0]["texto"]
+
+
+# --- caratulas de legalizacion con el balance embebido; texto ilegible -----------------------------
+
+def pdf_caratula(embebido: bytes, paginas: int = 1) -> bytes:
+    """Una caratula de legalizacion: PDF corto cuyo contenido real viaja como adjunto del PDF (lo que hacen los consejos profesionales)."""
+    from pypdf import PdfReader, PdfWriter
+
+    from .pdfs import pdf_con_paginas
+    w = PdfWriter(clone_from=PdfReader(__import__("io").BytesIO(pdf_con_paginas(["Legalizacion Nro 8-249863 Mendoza"] * paginas))))
+    w.add_attachment("original.pdf", embebido)
+    salida = __import__("io").BytesIO()
+    w.write(salida)
+    return salida.getvalue()
+
+
+def test_pdfs_de_reemplaza_la_caratula_por_el_balance_embebido():
+    from cnv import descarga
+
+    from .pdfs import pdf_con_paginas
+    balance = pdf_con_paginas(["Estado de situacion financiera", "Total del activo 35.000.000"])
+    r = descarga.pdfs_de(pdf_caratula(balance))
+    assert [n for n, _ in r] == ["original.pdf"] and r[0][1] == balance
+    # un PDF corriente, uno sin adjuntos y uno largo con adjuntos quedan como estaban
+    assert descarga.pdfs_de(balance) == [("documento.pdf", balance)]
+    largo = pdf_caratula(balance, paginas=descarga.MAX_PAGINAS_CARATULA + 1)
+    assert descarga.pdfs_de(largo) == [("documento.pdf", largo)]
+    assert descarga.pdfs_embebidos(b"%PDF-roto") == []
+    # los adjuntos que no son PDF no cuentan
+    from pypdf import PdfReader, PdfWriter
+    w = PdfWriter(clone_from=PdfReader(__import__("io").BytesIO(balance)))
+    w.add_attachment("nota.txt", b"hola")
+    out = __import__("io").BytesIO()
+    w.write(out)
+    assert [n for n, _ in descarga.pdfs_de(out.getvalue())] == ["documento.pdf"]
+
+
+def test_el_texto_de_una_presentacion_con_caratula_es_el_del_balance(monkeypatch):
+    from cnv import descarga
+
+    from .pdfs import pdf_con_paginas
+    balance = pdf_con_paginas(["Estado de situacion financiera " + "x" * 200, "Total del activo 35.000.000"])
+    monkeypatch.setattr(descarga, "adjuntos", lambda h: [{"guid": "g1", "nombre": "EEFF legalizado.pdf"}])
+    monkeypatch.setattr(descarga, "descargar_bytes", lambda *a, **k: pdf_caratula(balance))
+
+    class S:
+        def get(self, url, timeout=None):
+            return type("R", (), {"text": "", "encoding": None, "raise_for_status": lambda self: None})()
+
+    r = descarga.texto_de_presentacion("u", S())
+    assert "Total del activo 35.000.000" in r["texto"] and r["archivos"] == ["original.pdf"] and r["paginas"] == 2
+
+
+def test_una_caratula_ya_guardada_se_vuelve_a_bajar_una_vez_y_se_invalida_lo_que_financieros_concluyo(tmp_path, monkeypatch):
+    import datetime as dt
+    a = alm.AlmacenLocal(str(tmp_path))
+    alm.guardar_indice_empresa(a, EMP["cuit"], [
+        {"id": "7", "c": EMP["cuit"], "t": "estados_contables", "f": "2026-08-10", "s": "EC", "d": "NORMA CONTABLE: NIIF", "u": "u7", "texto_ok": True, "p": 1, "n": 1200, "intentos": 0},
+        {"id": "8", "c": EMP["cuit"], "t": "estados_contables", "f": "2026-08-11", "s": "EC", "d": "NORMA CONTABLE: NIIF", "u": "u8", "texto_ok": True, "p": 80, "n": 300000, "intentos": 0},
+    ])
+    alm.guardar_texto(a, EMP["cuit"], "7", "[pagina 1]\nLegalizacion")
+    fin.guardar_financieros(a, EMP["cuit"], {"periodos": [], "procesados": {"7": {"v": fin.VERSION_EXTRACTOR, "estado": "sin_paginas_relevantes"}, "8": {"v": fin.VERSION_EXTRACTOR, "estado": "ok"}}})
+    llamadas = []
+    monkeypatch.setattr(sincronizar, "listar", lambda *a, **k: [])
+    monkeypatch.setattr(sincronizar, "sesion", lambda: None)
+
+    def bajar(url, *a, **k):
+        llamadas.append(url)
+        return {"texto": "[pagina 1]\n" + "Total del activo 35.000.000 " * 300, "paginas": 40, "archivos": ["original.pdf"]}
+
+    monkeypatch.setattr(sincronizar, "texto_de_presentacion", bajar)
+    r = sincronizar.sincronizar_empresa(a, EMP, dt.date(2026, 10, 1), ("estados_contables",), trabajadores=1, con_listado=False)
+    assert llamadas == ["u7"] and r["nuevos"] == 1                                      # el de 80 paginas no es una caratula
+    m = {x["id"]: x for x in alm.leer_indice_empresa(a, EMP["cuit"])}["7"]
+    assert m["p"] == 40 and m["emb_ok"] and "Total del activo" in alm.leer_texto(a, EMP["cuit"], "7")
+    procesados = fin.leer_financieros(a, EMP["cuit"])["procesados"]
+    assert "7" not in procesados and "8" in procesados                                   # financieros vuelve a mirar solo el que cambio
+    assert sincronizar.sincronizar_empresa(a, EMP, dt.date(2026, 10, 1), ("estados_contables",), con_listado=False)["nuevos"] == 0
+
+
+def test_si_la_relectura_de_la_caratula_falla_se_conserva_el_texto_y_se_cuenta_el_intento(tmp_path, monkeypatch):
+    import datetime as dt
+    a = alm.AlmacenLocal(str(tmp_path))
+    alm.guardar_indice_empresa(a, EMP["cuit"], [{"id": "7", "c": EMP["cuit"], "t": "estados_contables", "f": "2026-08-10", "s": "EC", "d": "x", "u": "u7", "texto_ok": True, "p": 1, "n": 1200, "intentos": 0}])
+    monkeypatch.setattr(sincronizar, "listar", lambda *a, **k: [])
+    monkeypatch.setattr(sincronizar, "sesion", lambda: None)
+    monkeypatch.setattr(sincronizar.time, "sleep", lambda s: None)
+    monkeypatch.setattr(sincronizar, "texto_de_presentacion", lambda *a, **k: {})
+    for _ in range(3):
+        sincronizar.sincronizar_empresa(a, EMP, dt.date(2026, 10, 1), ("estados_contables",), con_listado=False)
+    m = alm.leer_indice_empresa(a, EMP["cuit"])[0]
+    assert m["texto_ok"] and m["emb_intentos"] == sincronizar.MAX_RELECTURAS                 # no insiste para siempre
+
+
+def test_texto_ilegible_de_glifos_se_trata_como_imagen_y_va_al_ocr(tmp_path, monkeypatch):
+    basura = "[pagina 1]\n" + " ".join(["/i255", "/2/3/4", "/10", "/3", "/i255"] * 60)
+    assert fin.texto_ilegible(basura) and not fin.texto_util(basura)
+    control = "[pagina 1]\n" + " ".join(["\x00", "\x01", "\x02", "texto"] * 40)
+    assert fin.texto_ilegible(control)
+    normal = "[pagina 1]\n" + "Total del activo 35.000.000 Patrimonio neto 14.000.000 " * 40
+    assert not fin.texto_ilegible(normal) and not fin.texto_ilegible("/i255 corto")
+    # ocr-ec toma tambien los que financieros dejo en sin_paginas_relevantes / sin_cifras pero su texto es basura
+    a = indice_escaneado(tmp_path)
+    fin.guardar_financieros(a, EMP["cuit"], {"periodos": [], "procesados": {"30": {"v": "7", "estado": "sin_paginas_relevantes"}, "20": {"v": "7", "estado": "sin_cifras"}}})
+    alm.guardar_texto(a, EMP["cuit"], "30", basura)
+    alm.guardar_texto(a, EMP["cuit"], "20", normal)
+    doble_ocr(monkeypatch)
+    assert sincronizar.ocr_estados_contables(a, EMP, max_docs=5) == {"leidos": 1, "sin_texto": 0, "pendientes": 0}
+    assert {x["id"]: x for x in alm.leer_indice_empresa(a, EMP["cuit"])}["30"]["ocr_ec"] == 3

@@ -147,10 +147,20 @@ def dividir_paginas(texto: str) -> list:
     return [(int(partes[i]), partes[i + 1].strip()) for i in range(1, len(partes) - 1, 2)]
 
 
+_RE_BASURA = re.compile(r"(?:^|\s)(?:/i?\d+|[\x00-\x08\x0b-\x1f])(?=\s|$)")
+
+
+def texto_ilegible(texto: str) -> bool:
+    """True si el "texto" del PDF es basura de fuentes sin mapa a Unicode: identificadores de glifo ("/i255 /2/3/4") o caracteres de control. Hay texto pero
+    no se puede leer: se trata como una imagen (OCR)."""
+    palabras = len(texto.split())
+    return palabras >= 50 and len(_RE_BASURA.findall(texto)) / palabras > 0.25
+
+
 def texto_util(texto: str) -> bool:
-    """False si el PDF es una imagen escaneada o casi no tiene texto (promedio < 150 caracteres por pagina)."""
+    """False si el PDF es una imagen escaneada o casi no tiene texto (promedio < 150 caracteres por pagina) o su texto es ilegible (ver texto_ilegible)."""
     paginas = dividir_paginas(texto)
-    if not paginas:
+    if not paginas or texto_ilegible(texto):
         return False
     util = sum(len(re.sub(r"\s", "", t)) for _, t in paginas)
     digitos = sum(c.isdigit() for _, t in paginas for c in t)

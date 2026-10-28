@@ -111,10 +111,12 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y tesseract-ocr tesseract-ocr-spa poppler-utils
       - run: pip install -r requirements.txt -r requirements-ocr.txt
+      - name: Estados contables pendientes del indice (incluye las caratulas de legalizacion con el balance embebido)
+        run: python -m cnv sync --desde "$(date -u -d '30 days ago' +%F)" --tipos estados_contables --tiempo-max 2400
       - name: OCR de estados contables escaneados (solo emisores con ONs)
-        run: python -m cnv ocr-ec --max-docs 1 --tiempo-max 6000
-      - name: Cifras de los estados leidos por OCR (tope de documentos chico)
-        run: python -m cnv financieros --max 40 --tiempo-max 1200
+        run: python -m cnv ocr-ec --max-docs 1 --tiempo-max 5400
+      - name: Cifras de los estados (texto nuevo y leidos por OCR; tope de documentos chico)
+        run: python -m cnv financieros --max 80 --tiempo-max 1500
       - name: Cobertura
         run: python -m cnv cobertura
 

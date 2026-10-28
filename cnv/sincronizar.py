@@ -78,6 +78,18 @@ def grupos_de_tipos(tipos: tuple) -> list:
     return [g for g in [*grupos, resto] if g]
 
 
+MAX_PAGINAS_CARATULA = 3   # (descarga.MAX_PAGINAS_CARATULA) un estado contable de hasta 3 paginas con poco texto es, casi seguro, una caratula de legalizacion
+MAX_CARACTERES_CARATULA = 4000
+MAX_RELECTURAS = 2         # veces que se vuelve a bajar una posible caratula antes de darla por leida
+
+
+def es_posible_caratula(m: dict) -> bool:
+    """Estado contable con texto de <= 3 paginas y casi sin caracteres, bajado antes de que se leyeran los PDF embebidos de las legalizaciones
+    (cnv/descarga.py: pdfs_embebidos). Se vuelve a bajar una vez para reemplazar la caratula por el balance."""
+    return bool(m.get("t") == "estados_contables" and m.get("texto_ok") and not m.get("emb_ok") and m.get("emb_intentos", 0) < MAX_RELECTURAS
+                and 0 < (m.get("p") or 0) <= MAX_PAGINAS_CARATULA and m.get("n") is not None and m["n"] < MAX_CARACTERES_CARATULA)
+
+
 def pendientes_del_indice(indice: list, ya_listados: set, tipos: tuple) -> list:
     """Documentos que el indice conoce pero nunca terminaron de bajarse y YA NO salen en el listado de la ventana pedida: el sync diario solo
     lista los ultimos dias, asi que lo que quedo sin bajar (corte por tiempo, tipos que no se pidieron esa vez, intento fallido) no se
@@ -86,7 +98,7 @@ def pendientes_del_indice(indice: list, ya_listados: set, tipos: tuple) -> list:
     for m in indice:
         if m["id"] in ya_listados or m.get("t") not in tipos or not m.get("u"):
             continue
-        if m.get("intentos", 0) >= MAX_INTENTOS or (m.get("texto_ok") and not m.get("parcial")):
+        if m.get("intentos", 0) >= MAX_INTENTOS or (m.get("texto_ok") and not m.get("parcial") and not es_posible_caratula(m)):
             continue
         salida.append({"doc_id": m["id"], "fecha": m.get("f") or "", "seccion": m.get("s", ""), "tipo": m["t"], "descripcion": m.get("d", ""), "url": m["u"]})
     return salida
@@ -115,6 +127,8 @@ def _procesar(almacen, empresa: dict, d: dict, previo: dict | None, limites: Lim
         return {**previo, "intentos": meta["intentos"], "error": "; ".join(f"{f['archivo']}: {f['motivo']}" for f in fallos)[:120]}
     alm.guardar_texto(almacen, empresa["cuit"], d["doc_id"], r["texto"])
     meta.update({"texto_ok": True, "p": r["paginas"], "n": len(r["texto"]), "archivos": r["archivos"][:3]})
+    if d["tipo"] == "estados_contables":
+        meta["emb_ok"] = True      # ya se miraron los PDF embebidos de las legalizaciones
     # campos opcionales: solo existen cuando hay algo que contar, asi los indices viejos no cambian de forma
     if r.get("truncado"):
         meta["trunc"] = r["truncado"]
@@ -163,6 +177,7 @@ def sincronizar_empresa(almacen, empresa: dict, desde: dt.date, tipos: tuple = T
     if max_docs is not None:
         faltan = faltan[:max_docs]
     nuevos = fallidos = 0
+    releidos = []      # caratulas de legalizacion reemplazadas por el balance embebido
 
     def guardar():
         alm.guardar_indice_empresa(almacen, empresa["cuit"], sorted(por_id.values(), key=lambda m: int(m["id"]), reverse=True))
@@ -177,13 +192,25 @@ def sincronizar_empresa(almacen, empresa: dict, desde: dt.date, tipos: tuple = T
                 for meta in pool.map(tarea, faltan):
                     if meta is None:
                         continue
-                    por_id[meta["id"]] = _fusionar(por_id.get(meta["id"]), meta)
+                    previo = por_id.get(meta["id"])
+                    if previo and es_posible_caratula(previo):    # relectura de una caratula: si falla, se conserva el texto que ya habia
+                        if not meta.get("texto_ok"):
+                            por_id[meta["id"]] = {**previo, "emb_intentos": previo.get("emb_intentos", 0) + 1}
+                            continue
+                        if meta.get("n", 0) > previo.get("n", 0):
+                            releidos.append(meta["id"])
+                    por_id[meta["id"]] = _fusionar(previo, meta)
                     nuevos += 1 if meta.get("texto_ok") else 0
                     fallidos += 0 if meta.get("texto_ok") else 1
                     if (nuevos + fallidos) % GUARDAR_CADA == 0:
                         guardar()  # un corte (timeout del job, red) no pierde lo ya bajado
     finally:
         guardar()
+        if releidos:      # lo que `financieros` concluyo sobre la caratula ya no vale: el texto cambio
+            estado = financieros.leer_financieros(almacen, empresa["cuit"])
+            for doc in releidos:
+                estado["procesados"].pop(doc, None)
+            financieros.guardar_financieros(almacen, empresa["cuit"], estado)
     return {"nuevos": nuevos, "fallidos": fallidos, "pendientes": max(0, len(faltan) - nuevos - fallidos)}
 
 
@@ -295,8 +322,10 @@ def ocr_estados_contables(almacen, empresa: dict, limites: Limites | None = None
     ultima = max((p.get("fecha_presentacion") or "" for p in fin["periodos"]), default="")
     cola = [m for m in sorted(indice, key=lambda m: (m.get("f") or "", int(m["id"])), reverse=True)
             if m.get("t") == "estados_contables" and m.get("u") and not m.get("ocr_ec") and not m.get("ocr_ec_intentado")
-            and (fin["procesados"].get(m["id"]) or {}).get("estado") == "escaneado" and (m.get("f") or "") > ultima
-            and not financieros.entidad_ajena(m, empresa)]
+            and (m.get("f") or "") > ultima and not financieros.entidad_ajena(m, empresa)
+            and ((fin["procesados"].get(m["id"]) or {}).get("estado") == "escaneado"
+                 or ((fin["procesados"].get(m["id"]) or {}).get("estado") in ("sin_paginas_relevantes", "sin_cifras")
+                     and financieros.texto_ilegible(alm.leer_texto(almacen, empresa["cuit"], m["id"]) or "")))]
     if max_docs is not None:
         cola = cola[:max_docs]
     leidos = sin_texto = 0
