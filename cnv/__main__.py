@@ -372,7 +372,11 @@ def _ejecutar(argv=None) -> int:
 
         empresas = [e for e in universo if not a.solo or e["cuit"] == a.solo.replace("-", "")]
         cliente = anthropic.Anthropic(timeout=120.0, max_retries=0)
-        total = fin.ejecutar(almacen, empresas, cliente, a.max, time.monotonic() + a.tiempo_max, a.completar_campos, reextraer_sin_resultados=a.reextraer_sin_resultados)
+        try:
+            prioridad = frozenset(o["cuit"] for o in cob.leer_ons() if o["cuit"])   # emisores con ONs primero
+        except OSError:
+            prioridad = frozenset()
+        total = fin.ejecutar(almacen, empresas, cliente, a.max, time.monotonic() + a.tiempo_max, a.completar_campos, reextraer_sin_resultados=a.reextraer_sin_resultados, prioridad=prioridad)
         print("TOTAL", total)
         print(f"indice financieros: {fin.construir_indice_financieros(almacen, universo)} periodos")
         return 0
