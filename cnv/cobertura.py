@@ -56,7 +56,7 @@ def _ultimo_estado_contable(financieros: dict):
         return None
     p = max(periodos, key=lambda p: (p["periodo"], int(p["doc"])))
     return {"doc": p["doc"], "periodo": p["periodo"], "tipo": p.get("tipo"), "balance": p.get("balance", "desconocido"),
-            "fecha_presentacion": p.get("fecha_presentacion"), "cifras": len(p.get("cifras") or {})}
+            "fecha_presentacion": p.get("fecha_presentacion"), "cifras": len(p.get("cifras") or {}), **({"ocr": True} if p.get("ocr") else {})}
 
 
 def _ultimo_aviso_pago(avisos: dict, indice: list):

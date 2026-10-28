@@ -10,7 +10,7 @@ Salida: cnv/indice/ratios.json.gz
        "insumos": {campo: {"valor", "pagina"}}, "derivados": {"ebitda": ...}, "ratios": {nombre: valor | null}, "motivos": {nombre: motivo}}]}}}
 """
 from . import almacen as alm
-from .financieros import leer_financieros, moneda_canonica
+from .financieros import gana, leer_financieros, moneda_canonica
 
 VERSION = 1
 
@@ -170,6 +170,7 @@ def ratios_de_periodo(p: dict, sospechosas=frozenset()) -> dict:
         "periodo": p.get("periodo"), "tipo": p.get("tipo"), "acumulado": p.get("acumulado"), "balance": p.get("balance", "desconocido"),
         "moneda": p.get("moneda"), "unidad": p.get("unidad"), "escala": p.get("escala"), "doc": p.get("doc"),
         "periodo_verificado": p.get("periodo_verificado"), "balance_coherente": p.get("balance_coherente"),
+        **({"ocr": True} if p.get("ocr") else {}),       # cifras leidas por OCR (ver financieros.rechazo_ocr)
         "insumos": {c: {"valor": insumos[c]["valor"], "pagina": insumos[c]["pagina"], **({"derivado": insumos[c]["derivado"]} if insumos[c].get("derivado") else {})} for c in usados},
         "derivados": derivados, "ratios": ratios, "motivos": motivos, "ratios_calculados": sum(v is not None for v in ratios.values()),
     }
@@ -185,7 +186,7 @@ def periodos_vigentes(periodos: list) -> list:
     vistos = {}
     for p in periodos:
         clave = (p["periodo"], p["tipo"], p["acumulado"], p.get("balance", "desconocido"), moneda_canonica(p.get("moneda")))
-        if clave not in vistos or int(p["doc"]) > int(vistos[clave]["doc"]):
+        if clave not in vistos or gana(p, vistos[clave]):     # el texto del PDF antes que el leido por OCR
             vistos[clave] = p
     return sorted(vistos.values(), key=lambda p: (p["periodo"], p.get("balance", ""), int(p["doc"])), reverse=True)
 

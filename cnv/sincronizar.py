@@ -3,11 +3,12 @@ import csv
 import datetime as dt
 import hashlib
 import json
+import os
 import time
 from concurrent.futures import ThreadPoolExecutor
 
 from . import almacen as alm
-from . import avisos_pago, ocr
+from . import avisos_pago, financieros, ocr
 from .descarga import Limites, extraer_pdf, pdfs_de_presentacion, texto_de_presentacion
 from .listado import listar, sesion
 
@@ -16,6 +17,7 @@ TIPOS_TEXTO = ("hechos", "estados_contables", "prospectos", "avisos_pago", "acta
 TIPOS_DEFECTO = TIPOS_TEXTO
 MAX_INTENTOS = 3
 DESDE_CARGA_INICIAL = dt.date(2023, 1, 1)  # historia que se baja de una empresa que todavia no tiene la suya (ver desde_efectivo)
+MAX_PAGINAS_OCR_EC = 80  # paginas que se leen por OCR de un estado contable escaneado (CNV_OCR_MAX_PAGINAS_EC); un balance de 70 paginas tarda ~6 min
 GUARDAR_CADA = 10  # documentos: el indice se guarda de a tandas para que un corte no obligue a rebajar lo ya bajado
 
 
@@ -269,6 +271,64 @@ def ocr_formularios(almacen, empresa: dict, limites: Limites | None = None, hast
             por_id[m["id"]] = nuevo
             if (leidos + sin_texto) % GUARDAR_CADA == 0:
                 guardar()
+    finally:
+        guardar()
+    return {"leidos": leidos, "sin_texto": sin_texto, "pendientes": len(cola) - leidos - sin_texto}
+
+
+def ocr_estados_contables(almacen, empresa: dict, limites: Limites | None = None, hasta_t: float | None = None, max_docs: int | None = None) -> dict:
+    """Estados contables que son imagen (financieros los marco `escaneado`: sin texto util para extraer cifras) y todavia son mas nuevos que el ultimo
+    periodo con cifras de la empresa: vuelve a bajar el PDF, lo lee con tesseract descartando los numeros de baja confianza y guarda el texto en una
+    ruta NUEVA (cnv/texto/{cuit}/{doc_id}.ocr.txt.gz; el original no se toca). Marca el documento `ocr_ec` y `financieros` lo procesa aparte, con
+    compuertas extra (balance que cuadra, cita literal, cierre y unidad en el texto) y el periodo queda `ocr: true`. Los mas nuevos primero.
+    Devuelve {"leidos","sin_texto","pendientes"} o {"error": ...}."""
+    if not ocr.activado():
+        return {"leidos": 0, "sin_texto": 0, "pendientes": 0, "error": "CNV_OCR no esta activado"}
+    cfg = ocr.configuracion()
+    try:
+        ocr.comprobar(cfg["idioma"])
+    except ocr.OcrNoDisponible as error:
+        return {"leidos": 0, "sin_texto": 0, "pendientes": 0, "error": str(error)}
+    indice = alm.leer_indice_empresa(almacen, empresa["cuit"])
+    por_id = {m["id"]: m for m in indice}
+    fin = financieros.leer_financieros(almacen, empresa["cuit"])
+    ultima = max((p.get("fecha_presentacion") or "" for p in fin["periodos"]), default="")
+    cola = [m for m in sorted(indice, key=lambda m: (m.get("f") or "", int(m["id"])), reverse=True)
+            if m.get("t") == "estados_contables" and m.get("u") and not m.get("ocr_ec") and not m.get("ocr_ec_intentado")
+            and (fin["procesados"].get(m["id"]) or {}).get("estado") == "escaneado" and (m.get("f") or "") > ultima
+            and not financieros.entidad_ajena(m, empresa)]
+    if max_docs is not None:
+        cola = cola[:max_docs]
+    leidos = sin_texto = 0
+    paginas_max = int(os.environ.get("CNV_OCR_MAX_PAGINAS_EC") or MAX_PAGINAS_OCR_EC)
+
+    def guardar():
+        alm.guardar_indice_empresa(almacen, empresa["cuit"], sorted(por_id.values(), key=lambda x: int(x["id"]), reverse=True))
+
+    try:
+        for m in cola:
+            if hasta_t and time.monotonic() > hasta_t:
+                break
+            try:
+                pdfs = _con_reintentos(lambda: pdfs_de_presentacion(m["u"], sesion(), limites, hasta_t), intentos=2)["pdfs"]
+            except Exception:  # la CNV no respondio: no se marca como intentado, se reintenta en la proxima corrida
+                continue
+            partes, paginas, ilegibles, numericas = [], 0, 0, 0
+            for nombre, pdf in pdfs:
+                total = extraer_pdf(pdf, 1)["paginas"]
+                o = ocr.ocr_pdf_confiable(pdf, total, paginas_max, cfg["idioma"], max(cfg["dpi"], 300), ocr.confianza_minima())
+                partes.append(o["texto"])
+                paginas, numericas, ilegibles = paginas + o["paginas_ocr"], numericas + o["numericas"], ilegibles + o["ilegibles"]
+            nuevo = dict(m)
+            if numericas - ilegibles > 0:
+                alm.guardar_texto_ocr(almacen, empresa["cuit"], m["id"], "\n\n".join(partes))
+                nuevo.update({"ocr_ec": paginas, "ocr_ec_numeros": numericas - ilegibles, "ocr_ec_ilegibles": ilegibles})
+                leidos += 1
+            else:
+                nuevo.update({"ocr_ec_intentado": True, "ocr_ec_ilegibles": ilegibles})
+                sin_texto += 1
+            por_id[m["id"]] = nuevo
+            guardar()          # cada documento tarda minutos: se guarda de a uno
     finally:
         guardar()
     return {"leidos": leidos, "sin_texto": sin_texto, "pendientes": len(cola) - leidos - sin_texto}
