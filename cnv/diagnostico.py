@@ -26,6 +26,7 @@ def estado_doc(m: dict) -> str:
 def documentos(almacen, empresas: list, cuits_con_ons: set) -> dict:
     """Cuenta los documentos de texto sin texto por (estado, tipo, emisor con ONs, motivo)."""
     cuenta = collections.Counter()
+    muestras = collections.defaultdict(list)
     por_empresa = collections.Counter()
     for e in empresas:
         for m in alm.leer_indice_empresa(almacen, e["cuit"]):
@@ -36,7 +37,21 @@ def documentos(almacen, empresas: list, cuits_con_ons: set) -> dict:
             motivo = motivo_corto(m.get("error")) if est != "sin_bajar" else "-"
             cuenta[(est, m["t"], "ONs" if e["cuit"] in cuits_con_ons else "sin_ONs", motivo, extra)] += 1
             por_empresa[(e["empresa"], est)] += 1
-    return {"cuenta": cuenta, "por_empresa": por_empresa}
+            if len(muestras[(est, m["t"], motivo)]) < 3:
+                muestras[(est, m["t"], motivo)].append(f"{e['cuit']}/{m['id']}@{m.get('f')} p={m.get('p')} n={m.get('n')} i={m.get('intentos', 0)}")
+    return {"cuenta": cuenta, "por_empresa": por_empresa, "muestras": muestras}
+
+
+def banderas_ec(almacen, empresas: list) -> collections.Counter:
+    """Estados contables CON texto por bandera: sirve para ver cuantos son imagen y que paso con el OCR."""
+    c = collections.Counter()
+    for e in empresas:
+        fin = leer_financieros(almacen, e["cuit"])["procesados"]
+        for m in alm.leer_indice_empresa(almacen, e["cuit"]):
+            if m.get("t") == "estados_contables" and m.get("texto_ok"):
+                p = fin.get(m["id"]) or {}
+                c[("ocr" if m.get("ocr") else "ocr_intentado" if m.get("ocr_intentado") else "escaneado" if m.get("escaneado") else "texto", p.get("estado", "sin_procesar"))] += 1
+    return c
 
 
 def estado_contable(almacen, e: dict, hoy: dt.date) -> dict:
@@ -59,6 +74,11 @@ def imprimir(almacen, empresas: list, cuits_con_ons: set, desactualizadas: list,
     d = documentos(almacen, empresas, cuits_con_ons)
     for (est, tipo, ons, motivo, extra), n in sorted(d["cuenta"].items(), key=lambda x: -x[1]):
         print(f"DIAG doc {n:5d} {est:12s} {tipo:18s} {ons:8s} {extra:9s} {motivo}")
+    for (est, tipo, motivo), lista in sorted(d["muestras"].items()):
+        if est != "sin_bajar":
+            print(f"DIAG muestra {est} {tipo} {motivo}: " + " ".join(lista))
+    for (bandera, est), n in sorted(banderas_ec(almacen, empresas).items(), key=lambda x: -x[1]):
+        print(f"DIAG ec_con_texto {n:5d} {bandera:14s} financieros={est}")
     pe = collections.Counter()
     for (emp, est), n in d["por_empresa"].items():
         pe[emp] += n
