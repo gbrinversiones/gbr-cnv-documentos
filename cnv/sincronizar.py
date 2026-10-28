@@ -63,6 +63,33 @@ def pendientes(docs: list, indice: list, tipos: tuple) -> list:
     return salida
 
 
+# Orden en que se atiende lo pendiente: primero lo que mueve cifras y avisos (estados contables), despues hechos y avisos de pago, al final el volumen
+# (prospectos, actas). Cada grupo es una pasada completa sobre las empresas (ver `grupos_de_tipos` y cnv/__main__.py).
+GRUPOS_PRIORIDAD = (("estados_contables",), ("hechos", "avisos_pago"), ("prospectos",), ("actas",))
+GRUPOS_CON_TOPE = 2  # a partir de este grupo (prospectos, actas) la pasada tiene un tope de tiempo propio: no desplaza a los de arriba
+
+
+def grupos_de_tipos(tipos: tuple) -> list:
+    """Los `tipos` pedidos repartidos en GRUPOS_PRIORIDAD (los que no figuran en ningun grupo van al final, juntos)."""
+    grupos = [tuple(t for t in g if t in tipos) for g in GRUPOS_PRIORIDAD]
+    resto = tuple(t for t in tipos if not any(t in g for g in GRUPOS_PRIORIDAD))
+    return [g for g in [*grupos, resto] if g]
+
+
+def pendientes_del_indice(indice: list, ya_listados: set, tipos: tuple) -> list:
+    """Documentos que el indice conoce pero nunca terminaron de bajarse y YA NO salen en el listado de la ventana pedida: el sync diario solo
+    lista los ultimos dias, asi que lo que quedo sin bajar (corte por tiempo, tipos que no se pidieron esa vez, intento fallido) no se
+    reintentaba nunca. Se rearman con los datos guardados (incluida la URL), en la forma que devuelve `listar`."""
+    salida = []
+    for m in indice:
+        if m["id"] in ya_listados or m.get("t") not in tipos or not m.get("u"):
+            continue
+        if m.get("intentos", 0) >= MAX_INTENTOS or (m.get("texto_ok") and not m.get("parcial")):
+            continue
+        salida.append({"doc_id": m["id"], "fecha": m.get("f") or "", "seccion": m.get("s", ""), "tipo": m["t"], "descripcion": m.get("d", ""), "url": m["u"]})
+    return salida
+
+
 def _procesar(almacen, empresa: dict, d: dict, previo: dict | None, limites: Limites | None = None, hasta_t: float | None = None) -> dict:
     meta = {
         "id": d["doc_id"], "c": empresa["cuit"], "e": empresa["empresa"], "f": d["fecha"], "t": d["tipo"],
@@ -117,17 +144,20 @@ def _fusionar(previo: dict | None, meta: dict) -> dict:
 
 
 def sincronizar_empresa(almacen, empresa: dict, desde: dt.date, tipos: tuple = TIPOS_DEFECTO, trabajadores: int = 3, max_docs: int | None = None,
-                        hasta_t: float | None = None, limites: Limites | None = None) -> dict:
-    """Baja los documentos nuevos de una empresa. Devuelve {"nuevos","fallidos","pendientes"}."""
+                        hasta_t: float | None = None, limites: Limites | None = None, con_listado: bool = True) -> dict:
+    """Baja los documentos nuevos de una empresa, y los que el indice ya conoce y quedaron sin bajar. Devuelve {"nuevos","fallidos","pendientes"}.
+    `con_listado=False` salta la consulta a la CNV y atiende solo lo pendiente del indice (pasadas siguientes a la primera)."""
     indice = alm.leer_indice_empresa(almacen, empresa["cuit"])
     desde = desde_efectivo(indice, desde, tipos)
-    docs = _con_reintentos(lambda: listar(empresa["cuit"], desde))
+    docs = _con_reintentos(lambda: listar(empresa["cuit"], desde)) if con_listado else []
     por_id = {d["id"]: d for d in indice}
     # el listado de hoy tambien alimenta el indice con los documentos de otros tipos (solo metadatos, sin texto)
     for d in docs:
         por_id.setdefault(d["doc_id"], {"id": d["doc_id"], "c": empresa["cuit"], "e": empresa["empresa"], "f": d["fecha"], "t": d["tipo"],
                                          "s": d["seccion"], "d": d["descripcion"][:300], "u": d["url"], "texto_ok": False, "intentos": 0})
     faltan = pendientes(docs, list(por_id.values()), tipos)
+    faltan += pendientes_del_indice(list(por_id.values()), {d["doc_id"] for d in docs}, tipos)
+    faltan.sort(key=lambda d: (tipos.index(d["tipo"]) if d["tipo"] in tipos else len(tipos), -int(d["doc_id"])))  # el orden de `tipos` es la prioridad; dentro, los mas nuevos
     if max_docs is not None:
         faltan = faltan[:max_docs]
     nuevos = fallidos = 0

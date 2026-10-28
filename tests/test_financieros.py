@@ -473,7 +473,7 @@ def test_documentos_de_version_4_no_se_vuelven_a_pagar_salvo_con_completar(tmp_p
     alm.guardar_indice_empresa(a, emp["cuit"], [{"id": "7", "t": "estados_contables", "f": "2026-08-10", "texto_ok": True, "d": "x"}])
     alm.guardar_texto(a, emp["cuit"], "7", BALANCE)
     fin.guardar_financieros(a, emp["cuit"], {"periodos": [], "procesados": {"7": {"v": "4", "estado": "ok"}}})
-    assert fin.VERSION_EXTRACTOR == "6" and fin.candidatos(a, [emp]) == []
+    assert fin.VERSION_EXTRACTOR == "7" and fin.candidatos(a, [emp]) == []
     assert [m["id"] for _, m in fin.candidatos(a, [emp], completar=True)] == ["7"]
     c = ClienteFalso(respuesta())
     assert fin.ejecutar(a, [emp], c, max_docs=5, completar=True)["ok"] == 1
@@ -514,3 +514,25 @@ def test_docs_sin_resultados_y_reextraccion_unica():
     assert fin.ya_procesado(estado, "1", reextraer=frozenset({"2"})) is True               # los que si tienen resultados no
     estado["procesados"]["2"]["v"] = fin.VERSION_EXTRACTOR
     assert fin.ya_procesado(estado, "2", reextraer=frozenset({"2"})) is True               # ya re-extraido con la version nueva: una sola vez
+
+
+def test_lo_descartado_por_el_modelo_con_un_extractor_anterior_se_pide_una_vez_mas():
+    """Los intermedios acumulados a 9 meses quedaban como "otro" por el prompt: no_es_estado_contable de la version 6 vuelve a ser candidato."""
+    for estado in ("no_es_estado_contable", "sin_periodo"):
+        assert not fin.ya_procesado({"procesados": {"1": {"v": "6", "estado": estado}}}, "1")
+        assert fin.ya_procesado({"procesados": {"1": {"v": fin.VERSION_EXTRACTOR, "estado": estado}}}, "1")      # ya re-pedido: no se paga otra vez
+    for estado in ("escaneado", "sin_cifras", "ok"):                                                         # dependen del texto, no del prompt
+        assert fin.ya_procesado({"procesados": {"1": {"v": "6", "estado": estado}}}, "1")
+
+
+def test_el_prompt_define_el_tipo_por_el_cierre_y_los_intermedios_no_son_otro():
+    assert "nueve meses" in fin.INSTRUCCIONES and "NO los hace \"otro\"" in fin.INSTRUCCIONES
+
+
+def test_los_emisores_con_ons_se_procesan_primero(tmp_path):
+    a = alm.AlmacenLocal(str(tmp_path))
+    e1, e2 = {"empresa": "SIN ONS", "cuit": "30111111112"}, {"empresa": "CON ONS", "cuit": "30222222223"}
+    alm.guardar_indice_empresa(a, e1["cuit"], [{"id": "9", "t": "estados_contables", "f": "2026-10-10", "texto_ok": True, "d": "x"}])
+    alm.guardar_indice_empresa(a, e2["cuit"], [{"id": "5", "t": "estados_contables", "f": "2026-01-10", "texto_ok": True, "d": "x"}])
+    assert [e["empresa"] for e, _ in fin.candidatos(a, [e1, e2])] == ["SIN ONS", "CON ONS"]                      # sin prioridad: el mas nuevo
+    assert [e["empresa"] for e, _ in fin.candidatos(a, [e1, e2], prioridad=frozenset({e2["cuit"]}))] == ["CON ONS", "SIN ONS"]

@@ -20,6 +20,7 @@ URL_VALET = "https://aif2.cnv.gov.ar/api/ValetKeyProvider/GetPublicValetKey/{gui
 URL_BLOB = "https://blob.cnv.gov.ar/BlobWebService.svc/DownloadBlob/{guid}"
 _RE_UPLOADER = re.compile(r'<propiedad[^>]*uploader="[^"]*"[^>]*>(.*?)</propiedad>', re.S | re.I)
 _ZIP = b"PK" + bytes([3, 4])
+_OLE = bytes([0xD0, 0xCF, 0x11, 0xE0])  # cabecera de los .doc viejos (formato binario de Office)
 
 MAX_ADJUNTOS = 3  # algunas presentaciones traen varios adjuntos; mas de 3 es ruido
 INTENTOS_ADJUNTO = 4
@@ -155,6 +156,25 @@ def pdfs_de(contenido: bytes) -> list:
     return []
 
 
+def texto_de_docx(contenido: bytes) -> str:
+    """Texto de un .docx (Word moderno: un ZIP con word/document.xml), un parrafo por linea. "" si no es un .docx legible. Los .doc viejos
+    (formato binario OLE) no se leen. Sirve a los hechos y actas que las empresas suben como Word en lugar de PDF."""
+    if contenido[:4] != _ZIP:
+        return ""
+    try:
+        with zipfile.ZipFile(io.BytesIO(contenido)) as z:
+            xml = z.read("word/document.xml").decode("utf-8", "replace")
+    except (KeyError, zipfile.BadZipFile, NotImplementedError, RuntimeError, EOFError, OSError):
+        return ""
+    xml = re.sub(r"<w:tab\s*/>", " ", xml)
+    parrafos = []
+    for p in re.findall(r"<w:p[ >].*?</w:p>", xml, flags=re.S):
+        t = "".join(html_lib.unescape(x) for x in re.findall(r"<w:t(?:\s[^>]*)?>(.*?)</w:t>", p, flags=re.S))
+        if t.strip():
+            parrafos.append(t.strip())
+    return "\n".join(parrafos)
+
+
 def extraer_pdf(pdf: bytes, max_paginas: int = 400, max_caracteres: int = 1_500_000) -> dict:
     """{"texto","paginas","leidas","truncado","cifrado","ilegible"}. `paginas` es el total real del PDF; `leidas`, las que entraron
     en el texto; `truncado` es None, "paginas" o "caracteres". Texto vacio si el PDF es una imagen escaneada, esta cifrado o roto."""
@@ -228,7 +248,16 @@ def texto_de_presentacion(url: str, s=None, limites: Limites | None = None, hast
             continue
         pdfs = pdfs_de(contenido)
         if not pdfs:
-            fallos.append({"archivo": a["nombre"], "motivo": "no es PDF ni ZIP con PDF"})
+            palabra = texto_de_docx(contenido)
+            if palabra.strip():  # Word moderno: el texto entra como una pagina (no hay paginas fijas) y no necesita OCR
+                partes.append(("[pagina 1]\n" + palabra)[:max(cupo_car, 1)])
+                nombres.append(a["nombre"])
+                paginas += 1
+                leidas_total += 1
+                cupo_pag -= 1
+                cupo_car -= len(palabra) + 2
+                continue
+            fallos.append({"archivo": a["nombre"], "motivo": "formato .doc no soportado" if contenido[:4] == _OLE else "no es PDF ni ZIP con PDF"})
             continue
         for nombre, pdf in pdfs:
             etiqueta = a["nombre"] if nombre == "documento.pdf" else nombre

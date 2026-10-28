@@ -50,12 +50,38 @@ on:
         type: boolean
         default: false
 
+      solo_diagnostico:
+        description: "true = no descarga ni procesa nada: solo corre el job `diagnostico` (lectura, sin modelo) y imprime lineas DIAG en el log. Default false"
+        type: boolean
+        default: false
+
 concurrency:
   group: sincronizar-cnv
   cancel-in-progress: false
 
 jobs:
+  diagnostico:
+    if: ${{ github.event.inputs.solo_diagnostico == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      GCS_BUCKET: ${{ vars.GCS_BUCKET }}
+      GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Diagnostico de documentos fallidos, sin bajar y estados contables desactualizados (solo lectura, con consulta a la CNV)
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          CNV_MAX_USD: ${{ github.event.inputs.tope_usd || '1' }}
+        run: python -m cnv diagnostico --en-vivo --probar-modelo 8
+
   descargar:
+    if: ${{ github.event.inputs.solo_diagnostico != 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 345
     strategy:
@@ -85,7 +111,7 @@ jobs:
   # idioma espanol, poppler) y es lento; si falla (apt caido, sin tesseract) no frena nada: continue-on-error.
   ocr:
     needs: descargar
-    if: always()
+    if: ${{ always() && github.event.inputs.solo_diagnostico != 'true' }}
     continue-on-error: true
     runs-on: ubuntu-latest
     timeout-minutes: 150
@@ -110,7 +136,7 @@ jobs:
 
   indice:
     needs: [descargar, ocr]
-    if: always()
+    if: ${{ always() && github.event.inputs.solo_diagnostico != 'true' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read

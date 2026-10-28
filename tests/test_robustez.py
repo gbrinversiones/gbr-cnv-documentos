@@ -559,3 +559,99 @@ def test_empresa_sin_historia_se_lista_desde_la_carga_inicial(tmp_path, monkeypa
     assert sincronizar.desde_efectivo([hr], reciente, ("hechos",)) == reciente
     # un --desde mas viejo que la carga inicial se respeta
     assert sincronizar.desde_efectivo([], dt.date(2020, 1, 1), ("hechos",)) == dt.date(2020, 1, 1)
+
+
+# ---------------------------------------------------------------------------
+# Pendientes del indice (fuera de la ventana del listado), prioridad por pasadas y Word
+# ---------------------------------------------------------------------------
+
+def _meta(i, tipo, **kw):
+    return {"id": str(i), "c": EMP["cuit"], "e": EMP["empresa"], "f": "2026-01-01", "t": tipo, "s": "S", "d": "x", "u": f"u{i}", "texto_ok": False, "intentos": 0, **kw}
+
+
+def test_grupos_de_tipos_ordena_por_prioridad():
+    assert sincronizar.grupos_de_tipos(sincronizar.TIPOS_TEXTO) == [("estados_contables",), ("hechos", "avisos_pago"), ("prospectos",), ("actas",)]
+    assert sincronizar.grupos_de_tipos(("actas", "hechos")) == [("hechos",), ("actas",)]
+    assert sincronizar.grupos_de_tipos(("desconocido",)) == [("desconocido",)]
+
+
+def test_pendientes_del_indice_toma_lo_que_el_listado_ya_no_trae():
+    indice = [_meta(1, "estados_contables"), _meta(2, "estados_contables", texto_ok=True), _meta(3, "estados_contables", intentos=3),
+              _meta(4, "estados_contables", intentos=2), _meta(5, "actas"), _meta(6, "estados_contables", texto_ok=True, parcial=1),
+              _meta(7, "estados_contables", u=""), _meta(8, "estados_contables")]
+    r = sincronizar.pendientes_del_indice(indice, {"8"}, ("estados_contables",))
+    assert sorted(d["doc_id"] for d in r) == ["1", "4", "6"]            # sin texto, con intentos disponibles, con URL, fuera del listado
+    assert r[0]["url"] == "u1" and r[0]["tipo"] == "estados_contables" and r[0]["fecha"] == "2026-01-01"
+
+
+def test_sync_sin_listado_baja_lo_pendiente_del_indice_por_prioridad(tmp_path, monkeypatch):
+    import datetime as dt
+    a = alm.AlmacenLocal(str(tmp_path))
+    alm.guardar_indice_empresa(a, EMP["cuit"], [_meta(10, "actas"), _meta(20, "hechos"), _meta(5, "estados_contables"), _meta(30, "hechos", texto_ok=True)])
+    monkeypatch.setattr(sincronizar, "listar", lambda *a, **k: pytest.fail("no debia consultar la CNV"))
+    monkeypatch.setattr(sincronizar, "sesion", lambda: None)
+    orden = []
+
+    def bajar(url, *a, **k):
+        orden.append(url)
+        return {"texto": "[pagina 1]\nok", "paginas": 1, "archivos": ["a.pdf"]}
+
+    monkeypatch.setattr(sincronizar, "texto_de_presentacion", bajar)
+    r = sincronizar.sincronizar_empresa(a, EMP, dt.date(2026, 10, 1), ("estados_contables", "hechos", "actas"), trabajadores=1, con_listado=False)
+    assert r == {"nuevos": 3, "fallidos": 0, "pendientes": 0}
+    assert orden == ["u5", "u20", "u10"]                                  # el orden de `tipos` es la prioridad
+    assert all(m["texto_ok"] for m in alm.leer_indice_empresa(a, EMP["cuit"]))
+
+
+def test_cli_sync_hace_una_pasada_por_grupo_y_lista_solo_en_la_primera(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("DATOS_LOCAL", str(tmp_path))
+    monkeypatch.setattr(cli, "cargar_universo", lambda: [EMP])
+    llamadas = []
+
+    def sync(almacen, e, desde, tipos, *a, con_listado=True, **k):
+        llamadas.append((tipos, con_listado))
+        return {"nuevos": 0, "fallidos": 0, "pendientes": 0}
+
+    monkeypatch.setattr(cli, "sincronizar_empresa", sync)
+    assert cli.main(["sync"]) == 0
+    assert llamadas == [(("estados_contables",), True), (("hechos", "avisos_pago"), False), (("prospectos",), False), (("actas",), False)]
+
+
+def _docx(parrafos):
+    import io
+    import zipfile
+    b = io.BytesIO()
+    cuerpo = "".join(f"<w:p><w:r><w:t xml:space=\"preserve\">{p}</w:t></w:r></w:p>" for p in parrafos)
+    with zipfile.ZipFile(b, "w") as z:
+        z.writestr("word/document.xml", f"<w:document><w:body>{cuerpo}<w:p></w:p></w:body></w:document>")
+    return b.getvalue()
+
+
+def test_texto_de_docx_y_formatos_no_soportados():
+    from cnv import descarga
+    assert descarga.texto_de_docx(_docx(["Hecho &amp; relevante", "Segundo parrafo"])) == "Hecho & relevante\nSegundo parrafo"
+    assert descarga.texto_de_docx(b"%PDF-1.4") == ""
+    assert descarga.texto_de_docx(b"PK\x03\x04roto") == ""
+    import io
+    import zipfile
+    b = io.BytesIO()
+    with zipfile.ZipFile(b, "w") as z:
+        z.writestr("otra/cosa.xml", "<x/>")
+    assert descarga.texto_de_docx(b.getvalue()) == ""                  # un ZIP sin word/document.xml
+
+
+def test_adjunto_word_entra_como_texto_y_el_doc_viejo_falla_con_su_motivo(monkeypatch):
+    from cnv import descarga
+    html = '<propiedad uploader="u">[{&quot;guid&quot;: &quot;g1&quot;, &quot;nombreArchivo&quot;: &quot;hr.docx&quot;}]</propiedad>'
+    monkeypatch.setattr(descarga, "adjuntos", lambda h: [{"guid": "g1", "nombre": "hr.docx"}])
+
+    class S:
+        def get(self, url, timeout=None):
+            return type("R", (), {"text": html, "encoding": None, "raise_for_status": lambda self: None})()
+
+    monkeypatch.setattr(descarga, "descargar_bytes", lambda *a, **k: _docx(["El directorio resolvio distribuir dividendos"]))
+    r = descarga.texto_de_presentacion("u", S())
+    assert r["texto"].startswith("[pagina 1]\nEl directorio") and r["paginas"] == 1 and r["archivos"] == ["hr.docx"] and not r["fallos"] and not r["escaneado"]
+    monkeypatch.setattr(descarga, "descargar_bytes", lambda *a, **k: bytes([0xD0, 0xCF, 0x11, 0xE0]) + b"x" * 200)
+    r = descarga.texto_de_presentacion("u", S())
+    assert r == {"fallos": [{"archivo": "hr.docx", "motivo": "formato .doc no soportado"}]}
