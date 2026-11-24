@@ -73,3 +73,23 @@ def test_ejecutar_guarda_texto_y_marca(tmp_path, monkeypatch):
     assert docs["8"]["vision_intentado"] and not docs["8"].get("texto_ok")
     assert "Clase 5" in alm.leer_texto(almacen, "30111111111", "7")
     assert cliente.llamadas[0]["messages"][0]["content"][0]["type"] == "document"
+
+
+def test_texto_de_doc_usa_antiword():
+    from cnv import descarga
+
+    ole = b"\xd0\xcf\x11\xe0" + b"\x00" * 100
+
+    class R:
+        returncode = 0
+        stdout = "Hecho relevante: la sociedad informa la emisión de ON Clase 3.".encode()
+
+    llamadas = []
+
+    def ejecutar(cmd, **kw):
+        llamadas.append(cmd)
+        return R()
+
+    assert descarga.texto_de_doc(ole, ejecutar).startswith("Hecho relevante")
+    assert llamadas[0][0] == "antiword"
+    assert descarga.texto_de_doc(b"%PDF-1.4", ejecutar) == ""

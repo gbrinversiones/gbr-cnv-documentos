@@ -181,6 +181,31 @@ def pdfs_de(contenido: bytes) -> list:
     return salida
 
 
+def texto_de_doc(contenido: bytes, ejecutar=None) -> str:
+    """Texto de un .doc viejo (Word binario OLE) con `antiword` (paquete del sistema; en el workflow se instala con apt). "" si no es un
+    .doc, si antiword no esta o si no saca nada. Muchos hechos relevantes y actas de la CNV vienen asi y quedaban sin texto."""
+    import shutil
+    import subprocess
+    import tempfile
+
+    if contenido[:4] != _OLE:
+        return ""
+    if ejecutar is None:
+        if not shutil.which("antiword"):
+            return ""
+        ejecutar = subprocess.run
+    with tempfile.NamedTemporaryFile(suffix=".doc") as f:
+        f.write(contenido)
+        f.flush()
+        try:
+            r = ejecutar(["antiword", "-w", "0", f.name], capture_output=True, timeout=60)
+        except (OSError, subprocess.SubprocessError):
+            return ""
+    if getattr(r, "returncode", 1) != 0:
+        return ""
+    return (r.stdout or b"").decode("utf-8", "replace").strip()
+
+
 def texto_de_docx(contenido: bytes) -> str:
     """Texto de un .docx (Word moderno: un ZIP con word/document.xml), un parrafo por linea. "" si no es un .docx legible. Los .doc viejos
     (formato binario OLE) no se leen. Sirve a los hechos y actas que las empresas suben como Word en lugar de PDF."""
@@ -273,8 +298,8 @@ def texto_de_presentacion(url: str, s=None, limites: Limites | None = None, hast
             continue
         pdfs = pdfs_de(contenido)
         if not pdfs:
-            palabra = texto_de_docx(contenido)
-            if palabra.strip():  # Word moderno: el texto entra como una pagina (no hay paginas fijas) y no necesita OCR
+            palabra = texto_de_docx(contenido) or texto_de_doc(contenido)
+            if palabra.strip():  # Word (moderno o .doc viejo): el texto entra como una pagina (no hay paginas fijas) y no necesita OCR
                 partes.append(("[pagina 1]\n" + palabra)[:max(cupo_car, 1)])
                 nombres.append(a["nombre"])
                 paginas += 1
