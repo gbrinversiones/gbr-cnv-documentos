@@ -50,6 +50,9 @@ on:
         type: boolean
         default: false
 
+      vision_docs:
+        description: "Documentos sin texto despues del OCR que se leen con Claude Haiku (PDF como imagen, ~US$ 0,02 por documento; 0 = no). Emisores con ONs primero"
+        default: "40"
       reintentar_descargas:
         description: "true = antes de descargar, da UNA segunda tanda de intentos a los documentos que agotaron los suyos por cortes de la CNV (`python -m cnv reintentos --descargas`). Sin modelo, sin costo de API. Default false"
         type: boolean
@@ -256,6 +259,13 @@ jobs:
         if: always()
         continue-on-error: true
         run: python -m cnv novedades
+      - name: Leer con Claude los documentos que el OCR no pudo leer (PDF como imagen; tope CNV_MAX_USD)
+        if: ${{ always() && (github.event.inputs.vision_docs || '40') != '0' }}
+        continue-on-error: true
+        timeout-minutes: 100
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: python -m cnv vision --max-docs "${{ github.event.inputs.vision_docs || '40' }}" --tiempo-max 5400
       - name: Resetear errores de API/cuenta (solo si resetear_errores_api = true)
         if: ${{ github.event.inputs.resetear_errores_api == 'true' }}
         continue-on-error: true

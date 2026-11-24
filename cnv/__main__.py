@@ -103,6 +103,10 @@ def _ejecutar(argv=None) -> int:
     sa.add_argument("--hoy", default=None, help="AAAA-MM-DD (para reproducir un informe)")
     sa.add_argument("--anomalias", default=None, metavar="ARCHIVO", help="detecta anomalias contra la corrida anterior, guarda la foto actual y escribe el cuerpo del issue en ARCHIVO (sin anomalias: no lo crea)")
     sa.add_argument("--max-fallidos", type=int, default=30)
+    vi = sub.add_parser("vision")
+    vi.add_argument("--max-docs", type=int, default=150, help="documentos enviados al modelo por corrida (ademas del tope CNV_MAX_USD)")
+    vi.add_argument("--tiempo-max", type=int, default=5400, help="segundos; corta limpio")
+    vi.add_argument("--ons", default="data/ons.csv", help="los emisores con ONs van primero")
     oe = sub.add_parser("ocr-ec")
     oe.add_argument("--max-docs", type=int, default=2, help="estados contables escaneados por empresa y por corrida (cada uno tarda minutos)")
     oe.add_argument("--tiempo-max", type=int, default=6000, help="segundos; corta limpio")
@@ -234,6 +238,31 @@ def _ejecutar(argv=None) -> int:
                 print(f"  {e['empresa']}: {f['leidos']} formularios de aviso de pago leidos por OCR, {f['sin_texto']} sin valores legibles", flush=True)
         print("TOTAL", total)
         print(f"indice global: {construir_indice_global(almacen, universo)} documentos")
+        return 0
+
+    if a.cmd == "vision":
+        if not os.environ.get("ANTHROPIC_API_KEY"):
+            print("falta ANTHROPIC_API_KEY")
+            return 2
+        import anthropic
+
+        from . import vision
+        from .concurrencia import ErrorDeCuenta
+        from . import descarga as _descarga
+        from . import listado as _listado
+        from . import sincronizar as _sinc
+
+        con_ons = {o["cuit"] for o in cob.leer_ons(a.ons) if o["cuit"]}
+        def bajar(url):
+            return _descarga.pdfs_de_presentacion(url, _listado.sesion(), Limites.desde_entorno())["pdfs"]
+
+        try:
+            total = vision.ejecutar(almacen, universo, anthropic.Anthropic(timeout=180.0, max_retries=0), _sinc.TIPOS_TEXTO, a.max_docs,
+                                    time.monotonic() + a.tiempo_max, bajar, con_ons)
+        except ErrorDeCuenta as error:
+            print(f"corte: {error}")
+            return 0
+        print("TOTAL", total)
         return 0
 
     if a.cmd == "ocr-ec":
