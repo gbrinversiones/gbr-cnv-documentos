@@ -63,3 +63,39 @@ def a_texto(cuenta: dict) -> str:
     orden = ("financieros", "resumenes", "clasificar", "eventos", "condiciones", "avisos-pago")
     lineas = [f"  {p}: {cuenta[p]} documentos reseteados" for p in orden]
     return "\n".join(lineas) + f"\nTOTAL {sum(cuenta.values())} (errores de contenido: sin tocar)"
+
+
+# --- Descargas que agotaron sus intentos (`python -m cnv reintentos --descargas`) ---
+# La CNV se corta seguido: un documento que fallo 3 veces un dia suele bajar bien otro. Se le da UNA segunda tanda de intentos
+# (campo `rescate`) a lo que fallo por la red o la CNV; no se tocan los que ya pasaron por OCR sin sacar texto ni los que no
+# tienen adjunto. Sin modelo: la descarga, la extraccion de texto y el OCR (tesseract) no gastan API.
+MAX_RESCATES = 1
+_PERMANENTES = ("sin adjunto",)
+
+
+def rescatable(m: dict, max_intentos: int) -> bool:
+    return (not m.get("texto_ok") and m.get("intentos", 0) >= max_intentos and not m.get("ocr_intentado")
+            and m.get("rescate", 0) < MAX_RESCATES and (m.get("error") or "").strip().lower() not in _PERMANENTES)
+
+
+def rescatar_descargas(almacen, empresas: list, prioridad: set | None = None) -> dict:
+    """{"rescatados": n, "empresas": m}. Devuelve a pendiente (intentos = 0, rescate + 1) las descargas rescatables. Con
+    `prioridad` (CUITs) solo esas empresas: los emisores de ONs primero, sin gastar el tiempo de la corrida en el resto."""
+    from . import almacen as alm
+    from .sincronizar import MAX_INTENTOS
+
+    total, tocadas = 0, 0
+    for e in empresas:
+        if not e.get("cuit") or (prioridad is not None and e["cuit"] not in prioridad):
+            continue
+        docs = alm.leer_indice_empresa(almacen, e["cuit"])
+        n = 0
+        for m in docs:
+            if rescatable(m, MAX_INTENTOS):
+                m.update({"intentos": 0, "rescate": m.get("rescate", 0) + 1})
+                n += 1
+        if n:
+            alm.guardar_indice_empresa(almacen, e["cuit"], docs)
+            total += n
+            tocadas += 1
+    return {"rescatados": total, "empresas": tocadas}

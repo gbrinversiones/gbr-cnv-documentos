@@ -50,6 +50,11 @@ on:
         type: boolean
         default: false
 
+      reintentar_descargas:
+        description: "true = antes de descargar, da UNA segunda tanda de intentos a los documentos que agotaron los suyos por cortes de la CNV (`python -m cnv reintentos --descargas`). Sin modelo, sin costo de API. Default false"
+        type: boolean
+        default: false
+
       solo_diagnostico:
         description: "true = no descarga ni procesa nada: solo corre el job `diagnostico` (lectura, y unas pocas llamadas al modelo) y imprime lineas DIAG en el log. Default false"
         type: boolean
@@ -120,8 +125,27 @@ jobs:
       - name: Cobertura
         run: python -m cnv cobertura
 
+  # Va en un job aparte y ANTES de descargar: los cuatro fragmentos escriben los indices de sus empresas y un reset en paralelo pisaria lo que bajan
+  rescate:
+    if: ${{ github.event.inputs.reintentar_descargas == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      GCS_BUCKET: ${{ vars.GCS_BUCKET }}
+      GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Segunda tanda de intentos para las descargas que fallaron (sin modelo)
+        run: python -m cnv reintentos --descargas
+
   descargar:
-    if: ${{ github.event.inputs.solo_diagnostico != 'true' && github.event.inputs.solo_ocr_ec != 'true' }}
+    needs: rescate
+    if: ${{ !cancelled() && needs.rescate.result != 'failure' && github.event.inputs.solo_diagnostico != 'true' && github.event.inputs.solo_ocr_ec != 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 345
     strategy:
@@ -300,7 +324,7 @@ jobs:
       - name: Salud de la base (resumen del job)
         if: always()
         continue-on-error: true
-        run: python -m cnv salud >> "$GITHUB_STEP_SUMMARY"
+        run: python -m cnv salud | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Muestra de calidad de cifras (resumen del job)
         if: always()
         continue-on-error: true
