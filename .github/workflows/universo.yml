@@ -66,7 +66,9 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git checkout -b "$rama"
-          git add data/universo.csv data/ons.csv informes/emisores_por_revisar.json
+          git add data/universo.csv data/ons.csv
+          # informes/ esta en .gitignore: sin -f el paso fallaba y el PR no se abria
+          git add -f informes/emisores_por_revisar.json
           git commit -m "Emisores de ONs de BYMA con CUIT confirmado por la CNV (coincidencia exacta)"
           git push origin "$rama"
           gh pr create --base master --head "$rama" --title "Emisores de ONs de BYMA con CUIT confirmado por la CNV" \
