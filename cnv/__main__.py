@@ -159,6 +159,8 @@ def _ejecutar(argv=None) -> int:
     ap.add_argument("--contar-formularios", action="store_true", help="solo lee: cuenta los avisos de pago que son formularios sin valores y como quedaron")
     rt = sub.add_parser("reintentos")
     rt.add_argument("--reset", action="store_true", help="devuelve a pendiente los documentos marcados con error de API/cuenta (saldo, clave, limites de tasa); no toca errores de contenido")
+    rt.add_argument("--descargas", action="store_true", help="da UNA segunda tanda de intentos a las descargas que agotaron los suyos (cortes de la CNV); sin modelo")
+    rt.add_argument("--solo-ons", action="store_true", help="con --descargas: solo emisores con ONs (data/ons.csv)")
     a = p.parse_args(argv)
 
     if a.cmd == "universo":  # no usa el almacen: solo el CSV y la CNV
@@ -256,10 +258,20 @@ def _ejecutar(argv=None) -> int:
         return 0
 
     if a.cmd == "reintentos":
-        if not a.reset:
-            print("indicar --reset")
+        if not a.reset and not a.descargas:
+            print("indicar --reset o --descargas")
             return 2
         from . import reintentos
+
+        if a.descargas:
+            prioridad = None
+            if a.solo_ons:
+                from .cobertura import leer_ons
+
+                prioridad = {o["cuit"] for o in leer_ons() if o["cuit"]}
+            print("TOTAL", reintentos.rescatar_descargas(almacen, universo, prioridad))
+            if not a.reset:
+                return 0
 
         cuenta = reintentos.resetear(almacen, universo)
         print(reintentos.a_texto(cuenta))
