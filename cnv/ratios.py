@@ -231,6 +231,11 @@ def construir(almacen, empresas: list) -> dict:
                 if v is None:
                     m = f["motivos"][n].split(":")[0]
                     stats["motivos"][m] = stats["motivos"].get(m, 0) + 1
+                    if n == "deuda_neta_ebitda" and m == "falta_cifra":
+                        # que cifra falta en los anuales: dice donde mejorar la extraccion (o si no vale la pena gastar mas modelo)
+                        faltan = stats.setdefault("deuda_neta_ebitda_faltan", {})
+                        for c in f["motivos"][n].split(":", 1)[1].split(","):
+                            faltan[c] = faltan.get(c, 0) + 1
                 else:
                     stats["calculados"][n] += 1
     salida = {"version": VERSION, "formulas": FORMULAS, "auditoria_cifras": bool(auditadas), "emisores": emisores}
