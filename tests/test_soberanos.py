@@ -84,3 +84,31 @@ def test_meses_cubre_el_rango():
 
 def test_parte_resolutiva():
     assert so.parte_resolutiva("Visto ... CONSIDERANDO ... RESUELVEN: ARTÍCULO 1º.- Dispónese").startswith("RESUELVEN")
+
+
+class _R:
+    def __init__(self, status, headers=None):
+        self.status_code, self.headers = status, headers or {}
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise RuntimeError(self.status_code)
+
+
+class _Sesion:
+    def __init__(self, estados):
+        self.estados = list(estados)
+
+    def get(self, url, **kw):
+        return self.estados.pop(0)
+
+
+def test_pedir_espera_ante_429_y_corta_si_sigue():
+    esperas = []
+    r = so.pedir(_Sesion([_R(429, {"Retry-After": "5"}), _R(200)]), "get", "u", dormir=esperas.append)
+    assert r.status_code == 200 and esperas == [5]
+    try:
+        so.pedir(_Sesion([_R(429)] * 4), "get", "u", dormir=esperas.append)
+        raise AssertionError("tenia que cortar")
+    except so.Limitado:
+        pass
