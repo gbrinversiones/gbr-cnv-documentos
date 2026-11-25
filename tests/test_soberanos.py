@@ -119,3 +119,10 @@ def test_resolucion_del_ministerio_con_espacios_duros():
     assert so.es_de_deuda(aviso, ministerio=True)
     assert not so.es_de_deuda(aviso)
     assert so.clave_busqueda("27.556", True) != "27.556"
+
+
+def test_vencimiento_del_ticker():
+    assert so.vencimiento_del_ticker("S29E7") == "2027-01-29"
+    assert so.vencimiento_del_ticker("S26F7") == "2027-02-26"
+    assert so.vencimiento_del_ticker("TZXD6") == "" and so.vencimiento_del_ticker("AL30") == ""
+    assert so.vencimiento_del_ticker("S31B7") == ""

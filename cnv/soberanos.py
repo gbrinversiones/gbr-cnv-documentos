@@ -210,6 +210,21 @@ def _clase_de_curva(archivo: str, p: dict) -> str:
     return ""
 
 
+_MESES_TICKER = "EFMAYJLGSOND"   # letra de mes de las letras y bonos del Tesoro: E enero, F febrero ... Y mayo, J junio, L julio, G agosto
+
+
+def vencimiento_del_ticker(ticker: str) -> str:
+    """Vencimiento que codifica el ticker de una letra o bono del Tesoro (S29E7 -> 2027-01-29); "" si no sigue esa convencion. Para las
+    especies nuevas que la curva todavia publica sin fecha."""
+    m = re.fullmatch(r"[A-Z]{1,3}(\d{2})([EFMAYJLGSOND])(\d)", ticker)
+    if not m:
+        return ""
+    try:
+        return dt.date(2020 + int(m.group(3)), _MESES_TICKER.index(m.group(2)) + 1, int(m.group(1))).isoformat()
+    except ValueError:
+        return ""
+
+
 def vigentes(traer_json) -> dict:
     """{TICKER: {"clase","vencimiento","nombre","curva"}} de las curvas publicadas (solo titulos nacionales, sin provincias ni ONs)."""
     salida = {}
@@ -225,7 +240,7 @@ def vigentes(traer_json) -> dict:
             clase = _clase_de_curva(archivo, p)
             if not t or not clase or t in salida:
                 continue
-            salida[t] = {"clase": clase, "vencimiento": str(p.get("fecha_vencimiento") or p.get("vencimiento") or "")[:10],
+            salida[t] = {"clase": clase, "vencimiento": str(p.get("fecha_vencimiento") or p.get("vencimiento") or "")[:10] or vencimiento_del_ticker(t),
                          "nombre": p.get("nombre") or "", "curva": archivo}
     return salida
 
