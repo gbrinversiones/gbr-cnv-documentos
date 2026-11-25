@@ -49,12 +49,14 @@ def test_partir_pdf_en_tandas_y_con_tope():
 def test_candidatos_solo_sin_texto_que_ya_pasaron_por_ocr():
     indice = [
         {"id": "1", "t": "hechos", "texto_ok": False, "u": "x", "ocr_intentado": True, "f": "2026-01-01"},
-        {"id": "2", "t": "hechos", "texto_ok": True, "u": "x", "escaneado": True},
+        {"id": "2", "t": "hechos", "texto_ok": True, "u": "x", "escaneado": True, "f": "2026-03-01"},
+        {"id": "6", "t": "hechos", "texto_ok": True, "u": "x", "escaneado": True, "ocr": 4},
+        {"id": "9", "t": "hechos", "texto_ok": True, "u": "x"},
         {"id": "3", "t": "hechos", "texto_ok": False, "u": "x", "ocr_intentado": True, "vision_intentado": True},
         {"id": "4", "t": "hechos", "texto_ok": False, "u": "x", "error": "ReadTimeout"},
         {"id": "5", "t": "prospectos", "texto_ok": False, "u": "x", "error": "sin texto", "f": "2026-05-01"},
     ]
-    assert [m["id"] for m in vision.candidatos(indice, ("hechos", "prospectos"))] == ["5", "1"]
+    assert [m["id"] for m in vision.candidatos(indice, ("hechos", "prospectos"))] == ["5", "2", "1"]
 
 
 def test_ejecutar_guarda_texto_y_marca(tmp_path, monkeypatch):
@@ -73,6 +75,21 @@ def test_ejecutar_guarda_texto_y_marca(tmp_path, monkeypatch):
     assert docs["8"]["vision_intentado"] and not docs["8"].get("texto_ok")
     assert "Clase 5" in alm.leer_texto(almacen, "30111111111", "7")
     assert cliente.llamadas[0]["messages"][0]["content"][0]["type"] == "document"
+
+
+def test_estado_contable_escaneado_entra_por_la_via_ocr(tmp_path, monkeypatch):
+    monkeypatch.setattr(conc, "presupuesto", lambda: type("P", (), {"esperar": lambda self, t: None})())
+    almacen = alm.AlmacenLocal(str(tmp_path))
+    alm.guardar_indice_empresa(almacen, "30111111111", [
+        {"id": "4", "t": "estados_contables", "texto_ok": True, "u": "u4", "escaneado": True, "ocr_intentado": True},
+    ])
+    cliente = _Cliente("[pagina 1]\nEstado de situacion financiera al 31/12/2025 | Activo corriente | 1.234.567\n" * 10)
+    r = vision.ejecutar(almacen, [{"empresa": "X", "cuit": "30111111111"}], cliente, ("estados_contables",), 10, 1e18,
+                        lambda u: [("a.pdf", _pdf(2))])
+    assert r["leidos"] == 1
+    m = alm.leer_indice_empresa(almacen, "30111111111")[0]
+    assert m["ocr_ec"] == 2 and not m.get("escaneado") and m["vision"]
+    assert "Activo corriente" in alm.leer_texto_ocr(almacen, "30111111111", "4")
 
 
 def test_texto_de_doc_usa_antiword():

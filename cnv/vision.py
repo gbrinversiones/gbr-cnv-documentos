@@ -32,13 +32,15 @@ SISTEMA = (
 
 
 def candidatos(indice: list, tipos: tuple) -> list:
-    """Documentos sin texto que ya pasaron por el OCR (o que agotaron sus intentos como escaneados) y nunca se mandaron al modelo.
-    Los mas nuevos primero."""
-    salida = [
-        m for m in indice
-        if m.get("t") in tipos and not m.get("texto_ok") and m.get("u") and not m.get("vision_intentado")
-        and (m.get("ocr_intentado") or m.get("escaneado") or "sin texto" in (m.get("error") or ""))
-    ]
+    """Documentos sin texto util que nunca se mandaron al modelo. Los mas nuevos primero. Son dos casos:
+    - fallaron sin texto (ya pasaron por el OCR, quedaron marcados escaneados o el error dice "sin texto");
+    - se guardaron igual pero son imagen: `escaneado` con `texto_ok` y sin paginas de OCR (el texto es casi solo las marcas [pagina N])."""
+    def sin_texto_util(m):
+        if not m.get("texto_ok"):
+            return m.get("ocr_intentado") or m.get("escaneado") or "sin texto" in (m.get("error") or "")
+        return m.get("escaneado") and not m.get("ocr")
+
+    salida = [m for m in indice if m.get("t") in tipos and m.get("u") and not m.get("vision_intentado") and sin_texto_util(m)]
     return sorted(salida, key=lambda m: (m.get("f") or "", int(m["id"])), reverse=True)
 
 
@@ -141,8 +143,13 @@ def ejecutar(almacen, empresas: list, cliente, tipos: tuple, max_docs: int, hast
                     continue
                 if util(texto) >= MIN_CARACTERES:
                     alm.guardar_texto(almacen, e["cuit"], m["id"], texto)
-                    nuevo = {k: v for k, v in m.items() if k not in ("error", "parcial")}
+                    nuevo = {k: v for k, v in m.items() if k not in ("error", "parcial", "escaneado")}
                     nuevo.update({"texto_ok": True, "p": paginas, "n": len(texto), "ocr": paginas, "vision": True, "vision_intentado": True})
+                    if m.get("t") == "estados_contables":
+                        # financieros salta los documentos con `ocr`; el texto reconocido entra por la via del OCR de estados contables,
+                        # con sus compuertas (balance que cuadra, cita literal, cierre y unidad) y el periodo queda marcado `ocr`
+                        alm.guardar_texto_ocr(almacen, e["cuit"], m["id"], texto)
+                        nuevo["ocr_ec"] = paginas
                     por_id[m["id"]] = nuevo
                     total["leidos"] += 1
                     print(f"  {e['empresa']} #{m['id']} ({m['t']}): {paginas} paginas leidas con el modelo", flush=True)
