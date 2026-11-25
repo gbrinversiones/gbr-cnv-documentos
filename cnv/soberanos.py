@@ -33,7 +33,8 @@ DESDE_DEFECTO = "2020-01-01"
 MAX_PAGINAS_BUSQUEDA = 10
 MAX_CARACTERES_MODELO = 16_000
 MAX_TOKENS_SALIDA = 2_000
-ESPERA_S = 1.0
+ESPERA_S = 3.0              # entre pedidos al Boletin: con 1 s cortaba con 429 a los ~250 pedidos
+ESPERAS_429_S = (30, 90, 180)
 VERSION = 1
 
 _MESES = {m: i + 1 for i, m in enumerate(("enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"))}
@@ -60,6 +61,24 @@ def plano(html: str) -> str:
     sin = re.sub(r"<br\s*/?>|</p>|</div>|</h\d>", "\n", sin, flags=re.IGNORECASE)
     texto = _html.unescape(re.sub(r"<[^>]+>", " ", sin))
     return re.sub(r"[ \t\r\f\v]+", " ", re.sub(r"\n\s*\n+", "\n", texto)).strip()
+
+
+class Limitado(Exception):
+    """El Boletin sigue respondiendo 429 despues de esperar: se corta la corrida y lo que falta queda pendiente."""
+
+
+def pedir(sesion, metodo: str, url: str, dormir=time.sleep, **kw):
+    """GET/POST con espera ante 429 (respeta Retry-After). Lanza Limitado si el limite no se levanta."""
+    for espera in (*ESPERAS_429_S, None):
+        r = getattr(sesion, metodo)(url, timeout=60, **kw)
+        if r.status_code != 429:
+            r.raise_for_status()
+            return r
+        if espera is None:
+            raise Limitado(f"429 sostenido en {url[:80]}")
+        retry = r.headers.get("Retry-After") or ""
+        dormir(int(retry) if retry.isdigit() and int(retry) <= 600 else espera)
+    raise Limitado(url)
 
 
 def parsear_resultados(html: str) -> list:
@@ -108,10 +127,9 @@ def buscar(sesion, texto: str, desde: dt.date, hasta: dt.date) -> list:
     """Avisos de la primera seccion que contienen `texto` entre dos fechas (todas las paginas, hasta MAX_PAGINAS_BUSQUEDA)."""
     vistos, salida, pagina = set(), [], 1
     while pagina and pagina <= MAX_PAGINAS_BUSQUEDA:
-        r = sesion.post(f"{BOLETIN}/busquedaAvanzada/realizarBusqueda",
-                        data={"params": json.dumps(_params(texto, desde, hasta, pagina)), "array_volver": "[]"},
-                        headers={"X-Requested-With": "XMLHttpRequest", "Referer": f"{BOLETIN}/busquedaAvanzada/primera"}, timeout=60)
-        r.raise_for_status()
+        r = pedir(sesion, "post", f"{BOLETIN}/busquedaAvanzada/realizarBusqueda",
+                  data={"params": json.dumps(_params(texto, desde, hasta, pagina)), "array_volver": "[]"},
+                  headers={"X-Requested-With": "XMLHttpRequest", "Referer": f"{BOLETIN}/busquedaAvanzada/primera"})
         contenido = r.json().get("content") or {}
         nuevos = [a for a in parsear_resultados(contenido.get("html") or "") if a["id"] not in vistos]
         if not nuevos:
@@ -136,9 +154,7 @@ def meses(desde: dt.date, hasta: dt.date):
 
 def texto_de_aviso(sesion, aviso: dict) -> str:
     """Texto del aviso (desde el organismo hasta el final de los articulos)."""
-    r = sesion.get(aviso["url"], timeout=60)
-    r.raise_for_status()
-    t = plano(r.text)
+    t = plano(pedir(sesion, "get", aviso["url"]).text)
     inicio = t.find("Ver texto del aviso")
     t = t[inicio + len("Ver texto del aviso"):] if inicio >= 0 else t
     fin = re.search(r"\n(?:e\. \d{2}/\d{2}/\d{4}|Fecha de publicaci[oó]n \d)", t)
@@ -319,7 +335,10 @@ def ejecutar(sesion, cliente, previo: dict, especies: dict, hasta: dt.date, hast
     buscado = dict(previo.get("buscado_hasta") or {})
     candidatos = {a["id"]: a for a in previo.get("pendientes") or []}
     informe = {"avisos_nuevos": 0, "leidas": 0, "sin_instrumentos": 0, "fallidas": 0, "pendientes": 0, "descartadas": 0}
+    corte = None
     for texto, desde_txt, ministerio in busquedas:
+        if corte:
+            break
         desde = dt.date.fromisoformat(max(desde_txt, buscado.get(texto, "")))
         for d0, d1 in meses(desde, hasta):
             try:
@@ -329,12 +348,15 @@ def ejecutar(sesion, cliente, previo: dict, especies: dict, hasta: dt.date, hast
             except Exception as error:  # noqa: BLE001  un mes que no responde se vuelve a buscar en la proxima corrida
                 print(f"  busqueda '{texto}' {d0:%Y-%m}: {str(error)[:100]}", flush=True)
                 buscado[texto] = d0.replace(day=1).isoformat()
+                if isinstance(error, Limitado):
+                    corte = str(error)
                 break
             buscado[texto] = d0.replace(day=1).isoformat()
             time.sleep(ESPERA_S)
     informe["avisos_nuevos"] = len(candidatos)
-    pendientes, corte = [], None
-    for a in sorted(candidatos.values(), key=lambda x: x["fecha"]):
+    pendientes = []
+    # de la mas nueva a la mas vieja: las especies que cotizan hoy salen de las normas recientes
+    for a in sorted(candidatos.values(), key=lambda x: (x["fecha"], int(x["id"])), reverse=True):
         if corte or informe["leidas"] + informe["fallidas"] >= max_normas or time.monotonic() > hasta_t:
             pendientes.append(a)
             continue
@@ -345,7 +367,7 @@ def ejecutar(sesion, cliente, previo: dict, especies: dict, hasta: dt.date, hast
                 normas[a["id"]] = {**a, "instrumentos": []}
                 continue
             instrumentos = extraer(cliente, texto, especies)
-        except ErrorDeCuenta as error:     # tope de dolares o limite de la cuenta: lo que falta queda para la proxima corrida
+        except (ErrorDeCuenta, Limitado) as error:     # tope de dolares, limite de la cuenta o del Boletin: lo que falta queda para la proxima
             corte = str(error)
             pendientes.append(a)
             continue
