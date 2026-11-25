@@ -112,8 +112,17 @@ def almacen_desde_entorno():
     return AlmacenLocal(os.environ.get("DATOS_LOCAL", "datos"))
 
 
+def a_utf8(texto: str) -> bytes:
+    """UTF-8 tolerante: algunos PDF traen mitades sueltas de un emoji (surrogates) que hacen fallar encode("utf-8") y
+    frenaban la sincronizacion de toda la empresa. Los pares validos se unen y las mitades sueltas quedan como U+FFFD."""
+    try:
+        return texto.encode("utf-8")
+    except UnicodeEncodeError:
+        return texto.encode("utf-16", "surrogatepass").decode("utf-16", "replace").encode("utf-8")
+
+
 def guardar_texto(almacen, cuit: str, doc_id: str, texto: str) -> None:
-    almacen.guardar(f"cnv/texto/{cuit}/{doc_id}.txt.gz", comprimir(texto.encode("utf-8")))
+    almacen.guardar(f"cnv/texto/{cuit}/{doc_id}.txt.gz", comprimir(a_utf8(texto)))
 
 
 def leer_texto(almacen, cuit: str, doc_id: str) -> str | None:
@@ -122,7 +131,7 @@ def leer_texto(almacen, cuit: str, doc_id: str) -> str | None:
 
 
 def guardar_indice_empresa(almacen, cuit: str, docs: list) -> None:
-    almacen.guardar(f"cnv/indice/{cuit}.json", json.dumps(docs, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+    almacen.guardar(f"cnv/indice/{cuit}.json", a_utf8(json.dumps(docs, ensure_ascii=False, separators=(",", ":"))))
 
 
 def leer_indice_empresa(almacen, cuit: str) -> list:
@@ -131,7 +140,7 @@ def leer_indice_empresa(almacen, cuit: str) -> list:
 
 
 def guardar_texto_ocr(almacen, cuit: str, doc_id: str, texto: str) -> None:
-    almacen.guardar(f"cnv/texto/{cuit}/{doc_id}.ocr.txt.gz", comprimir(texto.encode("utf-8")))
+    almacen.guardar(f"cnv/texto/{cuit}/{doc_id}.ocr.txt.gz", comprimir(a_utf8(texto)))
 
 
 def leer_texto_ocr(almacen, cuit: str, doc_id: str) -> str | None:
