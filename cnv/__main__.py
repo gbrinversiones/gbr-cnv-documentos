@@ -107,6 +107,12 @@ def _ejecutar(argv=None) -> int:
     vi.add_argument("--max-docs", type=int, default=150, help="documentos enviados al modelo por corrida (ademas del tope CNV_MAX_USD)")
     vi.add_argument("--tiempo-max", type=int, default=5400, help="segundos; corta limpio")
     vi.add_argument("--ons", default="data/ons.csv", help="los emisores con ONs van primero")
+    so = sub.add_parser("soberanos")
+    so.add_argument("--previo", default=None, help="catalogo.json de la corrida anterior (lo ya leido no se vuelve a mandar al modelo)")
+    so.add_argument("--salida", default="salida_soberanos")
+    so.add_argument("--max-normas", type=int, default=400, help="normas mandadas al modelo por corrida (ademas del tope CNV_MAX_USD)")
+    so.add_argument("--tiempo-max", type=int, default=3000, help="segundos; corta limpio")
+    so.add_argument("--extras", default="data/soberanos_extra.csv")
     oe = sub.add_parser("ocr-ec")
     oe.add_argument("--max-docs", type=int, default=2, help="estados contables escaneados por empresa y por corrida (cada uno tarda minutos)")
     oe.add_argument("--tiempo-max", type=int, default=6000, help="segundos; corta limpio")
@@ -185,6 +191,43 @@ def _ejecutar(argv=None) -> int:
             print(uni.a_markdown_verificacion(informe))
         for nombre in a.sugerir:
             print(uni.a_markdown_sugerencias(uni.sugerir(nombre, completo, confirmar=a.confirmar)))
+        return 0
+
+    if a.cmd == "soberanos":  # no usa el almacen: Boletin Oficial y curvas publicadas
+        if not os.environ.get("ANTHROPIC_API_KEY"):
+            print("falta ANTHROPIC_API_KEY")
+            return 2
+        import anthropic
+
+        from . import listado as _listado
+        from . import soberanos
+
+        previo = {}
+        if a.previo and os.path.exists(a.previo):
+            with open(a.previo, encoding="utf-8") as f:
+                previo = json.load(f)
+        sesion = _listado.sesion()
+        sesion.verify = True
+
+        def traer_json(url):
+            r = sesion.get(url, timeout=60)
+            r.raise_for_status()
+            return r.json()
+
+        especies = soberanos.vigentes(traer_json)
+        print(f"especies vigentes: {len(especies)}", flush=True)
+        normas, buscado, pendientes, informe = soberanos.ejecutar(
+            sesion, anthropic.Anthropic(timeout=180.0, max_retries=0), previo, especies, dt.datetime.now(dt.timezone(dt.timedelta(hours=-3))).date(), time.monotonic() + a.tiempo_max, a.max_normas)
+        catalogo = soberanos.construir_catalogo(normas, especies, soberanos.leer_extras(a.extras), dt.datetime.now(dt.timezone.utc))
+        catalogo.update({"buscado_hasta": buscado, "pendientes": pendientes})
+        destino = os.path.join(a.salida, "soberanos")
+        os.makedirs(destino, exist_ok=True)
+        with open(os.path.join(destino, "catalogo.json"), "w", encoding="utf-8") as f:
+            json.dump(catalogo, f, ensure_ascii=False, indent=1)
+        sin = sorted(t for t in especies if t not in catalogo["titulos"])
+        informe.update({"normas": len(normas), "especies_con_documento": len(catalogo["titulos"]), "especies_vigentes": len(especies)})
+        print("TOTAL", informe)
+        print("SIN DOCUMENTO", sin)
         return 0
 
     if a.cmd == "tiempos":  # no usa el almacen
