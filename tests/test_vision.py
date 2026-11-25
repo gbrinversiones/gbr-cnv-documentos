@@ -110,3 +110,12 @@ def test_texto_de_doc_usa_antiword():
     assert descarga.texto_de_doc(ole, ejecutar).startswith("Hecho relevante")
     assert llamadas[0][0] == "antiword"
     assert descarga.texto_de_doc(b"%PDF-1.4", ejecutar) == ""
+
+
+def test_guardar_texto_tolera_surrogates_sueltos(tmp_path):
+    almacen = alm.AlmacenLocal(str(tmp_path))
+    alm.guardar_texto(almacen, "30500003193", "1", "BBVA \ud83d suelto y par 😀 fin")
+    texto = alm.leer_texto(almacen, "30500003193", "1")
+    assert texto == "BBVA � suelto y par \U0001F600 fin"
+    alm.guardar_indice_empresa(almacen, "30500003193", [{"id": "1", "d": "aviso \udc00"}])
+    assert alm.leer_indice_empresa(almacen, "30500003193")[0]["d"] == "aviso �"
