@@ -112,3 +112,10 @@ def test_pedir_espera_ante_429_y_corta_si_sigue():
         raise AssertionError("tenia que cortar")
     except so.Limitado:
         pass
+
+
+def test_resolucion_del_ministerio_con_espacios_duros():
+    aviso = {"organismo": "MINISTERIO DE\xa0ECONOMÍA", "norma": "Resolución\xa0381/2020"}
+    assert so.es_de_deuda(aviso, ministerio=True)
+    assert not so.es_de_deuda(aviso)
+    assert so.clave_busqueda("27.556", True) != "27.556"

@@ -108,8 +108,14 @@ def parsear_resultados(html: str) -> list:
 def es_de_deuda(aviso: dict, ministerio: bool = False) -> bool:
     """Resoluciones conjuntas de Finanzas/Hacienda; con `ministerio`, tambien resoluciones del Ministerio de Economia (solo en busquedas
     acotadas a deuda, como la de la ley 27.556)."""
-    org, norma = aviso["organismo"].upper(), aviso["norma"].upper()
+    org, norma = (" ".join(aviso[k].split()).upper() for k in ("organismo", "norma"))   # el Boletin mete espacios duros (\xa0)
     return ("FINANZAS" in org and "CONJUNTA" in norma) or (ministerio and "MINISTERIO DE ECONOM" in org and norma.startswith("RESOLUCI"))
+
+
+def clave_busqueda(texto: str, ministerio: bool) -> str:
+    """Clave de `buscado_hasta`. Las busquedas que admiten resoluciones del Ministerio llevan sufijo propio: hasta que se normalizaron los
+    espacios duros esas resoluciones no entraban, y asi la busqueda vuelve a recorrerse desde el principio."""
+    return f"{texto}#ministerio" if ministerio else texto
 
 
 def _params(texto: str, desde: dt.date, hasta: dt.date, pagina: int) -> dict:
@@ -339,7 +345,8 @@ def ejecutar(sesion, cliente, previo: dict, especies: dict, hasta: dt.date, hast
     for texto, desde_txt, ministerio in busquedas:
         if corte:
             break
-        desde = dt.date.fromisoformat(max(desde_txt, buscado.get(texto, "")))
+        clave = clave_busqueda(texto, ministerio)
+        desde = dt.date.fromisoformat(max(desde_txt, buscado.get(clave, "")))
         for d0, d1 in meses(desde, hasta):
             try:
                 for a in buscar(sesion, texto, d0, d1):
@@ -347,11 +354,11 @@ def ejecutar(sesion, cliente, previo: dict, especies: dict, hasta: dt.date, hast
                         candidatos.setdefault(a["id"], a)
             except Exception as error:  # noqa: BLE001  un mes que no responde se vuelve a buscar en la proxima corrida
                 print(f"  busqueda '{texto}' {d0:%Y-%m}: {str(error)[:100]}", flush=True)
-                buscado[texto] = d0.replace(day=1).isoformat()
+                buscado[clave] = d0.replace(day=1).isoformat()
                 if isinstance(error, Limitado):
                     corte = str(error)
                 break
-            buscado[texto] = d0.replace(day=1).isoformat()
+            buscado[clave] = d0.replace(day=1).isoformat()
             time.sleep(ESPERA_S)
     informe["avisos_nuevos"] = len(candidatos)
     pendientes = []
