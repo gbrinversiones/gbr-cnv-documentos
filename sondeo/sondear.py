@@ -1,14 +1,19 @@
-"""Sondeo temporal: URL del PDF de un aviso del Boletin Oficial (no se mergea)."""
-import re, requests
+"""Sondeo temporal: comunicaciones del BCRA sobre BOPREAL (no se mergea)."""
+import io, re, requests
 s = requests.Session(); s.headers.update({"User-Agent": "Mozilla/5.0 (compatible; gbr-biblioteca/1.0)"})
-B = "https://www.boletinoficial.gob.ar"
-d = s.get(B + "/detalleAviso/primera/343225/20260617", timeout=40)
-print("DETALLE", d.status_code, len(d.text))
-for m in set(re.findall(r'(?:href|src|data-[a-z-]+|onclick)="([^"]*(?:pdf|PDF|descarg|pagina)[^"]*)"', d.text)):
-    print("  link:", m[:200])
-for u in ["/pdf/aviso/primera/343225/20260617", "/pdf/download_aviso/primera/343225/20260617", "/pdf/linkCuerpo/primera/343225/20260617"]:
+try:
+    from pypdf import PdfReader
+except ImportError:
+    PdfReader = None
+for n in [7918, 7925, 7935, 7937, 7980, 7999, 8019, 8020, 8022, 8032, 8038, 8048, 8053, 8062, 8085, 8100, 8123, 8155]:
+    u = f"https://www.bcra.gob.ar/Pdfs/comytexord/A{n}.pdf"
     try:
-        r = s.get(B + u, timeout=40)
-        print("PDF?", u, r.status_code, r.headers.get("content-type"), len(r.content), r.content[:8])
+        r = s.get(u, timeout=40)
+        t = ""
+        if r.ok and r.content[:4] == b"%PDF" and PdfReader:
+            t = " ".join((p.extract_text() or "") for p in PdfReader(io.BytesIO(r.content)).pages[:2])
+        t = re.sub(r"\s+", " ", t)
+        k = t.upper().find("BOPREAL")
+        print(f"A{n}", r.status_code, r.headers.get("content-type"), len(r.content), "BOPREAL" if k >= 0 else "-", "|", t[:160], "|", t[max(0, k-100):k+300] if k >= 0 else "")
     except Exception as e:
-        print("PDF?", u, "error", e)
+        print(f"A{n} error {e}")
