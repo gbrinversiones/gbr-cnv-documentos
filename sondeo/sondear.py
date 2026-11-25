@@ -1,19 +1,28 @@
 """Sondeo temporal de fuentes de titulos publicos (no se mergea)."""
-import re, html, requests
+import re, html, requests, json
 H = {"User-Agent": "Mozilla/5.0 (compatible; gbr-biblioteca/1.0)"}
 def plano(t): return re.sub(r"\s+", " ", html.unescape(re.sub(r"<script.*?</script>|<style.*?</style>|<[^>]+>", " ", t, flags=re.S))).strip()
-def get(u): return requests.get(u, headers=H, timeout=40)
-r = get("https://www.argentina.gob.ar/normativa?jurisdiccion=nacional&texto=letras%20del%20tesoro%20capitalizables&tipo_norma=resolucion%20conjunta")
+s = requests.Session(); s.headers.update(H)
+r = s.get("https://www.boletinoficial.gob.ar/seccion/primera/20260617", timeout=40)
 t = r.text
-i = t.find("norma-432388")
-print("=== BLOQUE RESULTADO ===\n", t[i-1500:i+2500])
-print("=== PAGINACION ===", sorted(set(re.findall(r'href="([^"]*(?:page|pagina|limit|offset)=[^"]*)"', t)))[:20])
-print("=== total ===", re.findall(r"(\d[\d.]*)\s+(?:resultados|normas)", plano(t))[:5])
-for u in ["https://www.argentina.gob.ar/normativa/nacional/norma-426756/texto", "https://www.argentina.gob.ar/normativa/nacional/norma-344092/texto", "https://www.argentina.gob.ar/node/483594"]:
-    p = plano(get(u).text)
-    k = max(0, p.find("Visto") if "Visto" in p else p.find("VISTO"))
-    print(f"\n=== {u} ===\n", p[k:k+3500])
-r = get("https://www.argentina.gob.ar/normativa?jurisdiccion=nacional&tipo_norma=resolucion%20conjunta&texto=deuda%20publica&page=2")
-print("\n=== page=2 ===", r.status_code, r.url, re.findall(r"norma-\d+", r.text)[:12])
-r = get("https://www.argentina.gob.ar/normativa?jurisdiccion=nacional&tipo_norma=resolucion%20conjunta&texto=deuda%20publica&limit=50&offset=50")
-print("=== offset ===", r.status_code, r.url, re.findall(r"norma-\d+", r.text)[:12])
+print("=== LISTADO", r.status_code, r.url, len(t))
+i = t.find("FINANZAS")
+print(t[max(0,i-2500):i+1500])
+links = re.findall(r'href="(/detalleAviso/primera/\d+/\d+)"', t)
+print("n avisos", len(set(links)))
+# detalle del aviso que menciona finanzas
+m = re.search(r'href="(/detalleAviso/primera/\d+/\d+)"[^>]*>(?:(?!href=).){0,1500}?FINANZAS', t, re.S)
+if m:
+    d = s.get("https://www.boletinoficial.gob.ar" + m.group(1), timeout=40)
+    p = plano(d.text)
+    k = p.find("Visto") if "Visto" in p else p.find("VISTO")
+    print("=== DETALLE", m.group(1), d.status_code, len(d.text))
+    print(p[max(0,k-600):k+200])
+    print("... RESUELVEN:", p[p.find("RESUELVEN"):p.find("RESUELVEN")+2500])
+    print("pdfs:", re.findall(r'href="([^"]+\.pdf[^"]*)"', d.text)[:5], re.findall(r'href="(/pdf/aviso/[^"]+)"', d.text)[:5])
+# busqueda avanzada
+for url, data in [("https://www.boletinoficial.gob.ar/busquedaAvanzada/realizarBusqueda", {"params": json.dumps({"busquedaRubro": False, "hayMasResultadosBusqueda": True, "ejecutandoLlamadaAsincronicaBusqueda": False, "ultimaSeccion": "", "filtroPorRubrosSeccion": False, "filtroPorRubroBusqueda": False, "filtroPorSeccionBusqueda": False, "busquedaOriginal": True, "ordenamientoSegunda": False, "seccionesOriginales": [1], "ultimoItemExterno": None, "ultimoItemInterno": None, "texto": "Secretaría de Finanzas Letras del Tesoro", "rubros": [], "nroNorma": "", "anioNorma": "", "denominacion": "", "tipoContratacion": "", "anioContratacion": "", "nroContratacion": "", "fechaDesde": "01/01/2025", "fechaHasta": "31/01/2025", "todasLasPalabras": True, "comienzaDenominacion": True, "seccion": [1], "tipoBusqueda": "Avanzada", "numeroPagina": 1, "ultimoRubro": ""}), "array_volver": "[]"})]:
+    try:
+        b = s.post(url, data=data, timeout=40, headers={"X-Requested-With": "XMLHttpRequest", "Referer": "https://www.boletinoficial.gob.ar/busquedaAvanzada/primera"})
+        print("=== BUSQUEDA", b.status_code, len(b.text)); print(b.text[:3000])
+    except Exception as e: print("busqueda error", e)
