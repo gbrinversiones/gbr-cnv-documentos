@@ -8,6 +8,8 @@ jobs:
     env:
       GCS_BUCKET: ${{ vars.GCS_BUCKET }}
       GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      CNV_MAX_USD: '1'
     steps:
       - uses: actions/checkout@v4
       - run: pip install -r requirements.txt && python sondeo/sondear.py
