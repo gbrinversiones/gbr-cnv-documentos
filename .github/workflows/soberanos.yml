@@ -1,0 +1,69 @@
+name: soberanos
+# Catalogo de los documentos de emision de los titulos publicos nacionales (python -m cnv soberanos): Boletin Oficial + data/soberanos_extra.csv.
+# Se publica en la rama `datos-soberanos` de este repo (publico), en soberanos/catalogo.json:
+#   https://raw.githubusercontent.com/gbrinversiones/gbr-cnv-documentos/datos-soberanos/soberanos/catalogo.json
+# Lo leen la biblioteca del asistente (portfolio-manager) y la ficha de cada bono del sitio. Incremental: cada norma se manda al modelo una vez.
+on:
+  schedule:
+    - cron: "15 12 * * 1-5"   # 09:15 ART, dias habiles (las licitaciones y sus resoluciones salen en el Boletin de la manana)
+  workflow_dispatch:
+    inputs:
+      max_normas:
+        description: "Normas mandadas al modelo en esta corrida"
+        default: "400"
+      tope_usd:
+        description: "Tope de dolares de la API para esta corrida"
+        default: "2"
+      reiniciar:
+        description: "Ignorar el catalogo anterior y volver a leer todo"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: soberanos
+  cancel-in-progress: false
+
+jobs:
+  catalogo:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      CNV_MAX_USD: ${{ inputs.tope_usd || '1' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Catalogo anterior
+        if: ${{ !inputs.reiniciar }}
+        run: |
+          if git fetch --depth 1 origin datos-soberanos; then
+            git show FETCH_HEAD:soberanos/catalogo.json > previo.json || true
+          fi
+          ls -la previo.json 2>/dev/null || echo "sin catalogo anterior"
+      - name: Leer el Boletin Oficial
+        run: python -m cnv soberanos --previo previo.json --max-normas "${{ inputs.max_normas || '400' }}" --tiempo-max 4800
+      - name: Publicar en la rama datos-soberanos
+        run: |
+          set -e
+          cd salida_soberanos
+          git init -q -b datos-soberanos
+          git config user.name "github-actions[bot]"
+          git config user.email "41898099+github-actions[bot]@users.noreply.github.com"
+          git add soberanos
+          git commit -q -m "Catalogo de titulos publicos ($(date -u +%F))"
+          git push -q --force "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" datos-soberanos
+          python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json
+          c = json.load(open("soberanos/catalogo.json"))
+          print(f"### Titulos publicos: {len(c['titulos'])} especies con documento, {len(c['normas'])} normas leidas, {len(c.get('pendientes') or [])} pendientes")
+          for t, x in c["titulos"].items():
+              d = x["documentos"][0]
+              print(f"- **{t}** ({x['clase']}, vence {x['vencimiento']}): {d['norma']} {d['fecha']} [{len(x['documentos'])} doc.]")
+          PY
