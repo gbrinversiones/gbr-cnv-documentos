@@ -15,7 +15,7 @@ SIS = ("Sos analista de renta fija. Del documento (aviso de resultado, suplement
 ESQ = {"type": "object", "additionalProperties": False, "required": ["tasa_anual_pct", "cita_tasa", "frecuencia", "cita_frecuencia", "primera_fecha_interes",
        "cita_primera_fecha", "amortizacion", "cita_amortizacion", "fecha_vencimiento"],
        "properties": {"tasa_anual_pct": {"type": ["number", "null"]}, "cita_tasa": {"type": ["string", "null"]},
-                      "frecuencia": {"type": ["string", "null"], "enum": ["mensual", "trimestral", "semestral", "anual", "al_vencimiento", None]},
+                      "frecuencia": {"type": "string", "enum": ["mensual", "trimestral", "semestral", "anual", "al_vencimiento", "no_figura"]},
                       "cita_frecuencia": {"type": ["string", "null"]}, "primera_fecha_interes": {"type": ["string", "null"]},
                       "cita_primera_fecha": {"type": ["string", "null"]}, "fecha_vencimiento": {"type": ["string", "null"]},
                       "amortizacion": {"type": "array", "items": {"type": "object", "additionalProperties": False, "required": ["fecha", "porcentaje"],
@@ -32,7 +32,13 @@ for t in T:
     for f in (on.get("fuentes") or {}).values():
         if f.get("doc") and f["doc"] not in ids:
             ids.append(f["doc"])
-    docs = {str(d.get("id")): d for d in (alm.leer_indice_empresa(a, cuit) or [])}
+    lista = alm.leer_indice_empresa(a, cuit) or []
+    docs = {}
+    for d in lista:
+        for k in ("id", "doc_id", "documento", "uuid"):
+            if d.get(k) is not None:
+                docs[str(d[k])] = d
+    muestra = lista[0] if lista else None
     res = []
     for doc in ids[:3]:
         texto = alm.leer_texto(a, cuit, doc) or ""
@@ -47,7 +53,7 @@ for t in T:
         nt = norm(texto)
         r["citas_ok"] = {k: (norm(r.get(k)) in nt) if r.get(k) else None for k in ("cita_tasa", "cita_frecuencia", "cita_primera_fecha", "cita_amortizacion")}
         res.append({"doc": doc, "meta": {k: meta.get(k) for k in list(meta)[:12]}, **r})
-    salida[t] = {"cuit": cuit, "vence": on["vence"], "indice": on["campos"], "extraido": res}
+    salida[t] = {"muestra": muestra, "cuit": cuit, "vence": on["vence"], "indice": on["campos"], "extraido": res}
 print("SALIDA_JSON_GZ_B64")
 print(base64.b64encode(gzip.compress(json.dumps(salida, ensure_ascii=False).encode())).decode())
 print("FIN_SALIDA")
