@@ -245,18 +245,32 @@ def vigentes(traer_json) -> dict:
     return salida
 
 
+_CLASES_AFINES = ({"lecap", "boncap"}, {"dual", "tamar"})   # los duales TAMAR/fija se publican en la curva de tasa variable
+
+
+def clases_compatibles(a: str, b: str) -> bool:
+    if not a or not b or a == "otra" or b == "otra" or a == b:
+        return True
+    return any(a in g and b in g for g in _CLASES_AFINES)
+
+
 def vincular(instrumento: dict, especies: dict) -> str | None:
-    """Especie vigente del instrumento: la que nombra el texto si existe y su vencimiento coincide; si no, la unica de la misma clase
-    con el mismo vencimiento. None si no hay una sola."""
+    """Especie vigente del instrumento: la que nombra el texto si existe y coinciden vencimiento y clase; si no, la unica de clase
+    compatible con el mismo vencimiento. None si no hay una sola. Los BOPREAL (BPO*) son del BCRA y nunca salen de una norma del
+    Tesoro: tienen el mismo vencimiento que algunos Bonar y se confundian (BPOA8 con AO28)."""
+    especies = {t: x for t, x in especies.items() if not t.startswith("BPO")}
     venc = instrumento.get("vencimiento") or ""
+    clase = clase_de(instrumento.get("denominacion", ""))
     e = str(instrumento.get("especie") or "").upper()
-    if e in especies and (not venc or not especies[e]["vencimiento"] or especies[e]["vencimiento"] == venc):
+    if (e in especies and (not venc or not especies[e]["vencimiento"] or especies[e]["vencimiento"] == venc)
+            and clases_compatibles(clase, especies[e]["clase"])):
         return e
     if not venc:
         return None
-    clase = clase_de(instrumento.get("denominacion", ""))
-    candidatas = [t for t, x in especies.items() if x["vencimiento"] == venc and x["clase"] == clase]
-    return candidatas[0] if len(candidatas) == 1 else None
+    candidatas = [t for t, x in especies.items() if x["vencimiento"] == venc and clases_compatibles(clase, x["clase"])]
+    exactas = [t for t in candidatas if especies[t]["clase"] == clase]
+    elegidas = exactas or candidatas
+    return elegidas[0] if len(elegidas) == 1 else None
 
 
 # ---------------------------------------------------------------------------

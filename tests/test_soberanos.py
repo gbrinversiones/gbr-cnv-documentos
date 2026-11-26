@@ -126,3 +126,20 @@ def test_vencimiento_del_ticker():
     assert so.vencimiento_del_ticker("S26F7") == "2027-02-26"
     assert so.vencimiento_del_ticker("TZXD6") == "" and so.vencimiento_del_ticker("AL30") == ""
     assert so.vencimiento_del_ticker("S31B7") == ""
+
+
+def test_vincular_respeta_la_clase_y_deja_afuera_los_bopreal():
+    especies = {
+        "AO28": {"clase": "usd", "vencimiento": "2028-10-31"}, "BPOA8": {"clase": "usd", "vencimiento": "2028-10-31"},
+        "S30N6": {"clase": "lecap", "vencimiento": "2026-11-30"}, "D30N6": {"clase": "dolar_linked", "vencimiento": "2026-11-30"},
+        "TTD26": {"clase": "tamar", "vencimiento": "2026-12-15"},
+    }
+    bonar = {"denominacion": "Bono del Tesoro Nacional en dólares estadounidenses 6% con vencimiento 31 de octubre de 2028",
+             "especie": "BPOA8", "vencimiento": "2028-10-31"}
+    assert so.vincular(bonar, especies) == "AO28"
+    letra = {"denominacion": "Letra del Tesoro Nacional vinculada al dólar estadounidense cero cupón", "especie": "S30N6",
+             "vencimiento": "2026-11-30"}
+    assert so.vincular(letra, especies) == "D30N6"
+    dual = {"denominacion": "Bono del Tesoro Nacional en pesos a tasa dual con vencimiento 15 de diciembre de 2026", "especie": None,
+            "vencimiento": "2026-12-15"}
+    assert so.vincular(dual, especies) == "TTD26"
