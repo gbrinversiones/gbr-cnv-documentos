@@ -1,24 +1,27 @@
-"""Sondeo temporal: BOPREAL Serie 4 en el BCRA y AO28 en el Boletin (no se mergea)."""
-import io, re, time, requests
-from pypdf import PdfReader
-s = requests.Session(); s.headers.update({"User-Agent": "Mozilla/5.0 (compatible; gbr-biblioteca/1.0)"})
-def texto_pdf(u, paginas=3):
-    r = s.get(u, timeout=40)
-    if not (r.ok and r.content[:4] == b"%PDF"):
-        return None
-    return re.sub(r"\s+", " ", " ".join((p.extract_text() or "") for p in PdfReader(io.BytesIO(r.content)).pages[:paginas]))
-for aviso in ["341303/20260429", "343851/20260701", "342001/20260515", "342495/20260528"]:
-    t = texto_pdf(f"https://www.boletinoficial.gob.ar/pdf/aviso/primera/{aviso}", 6) or ""
-    for m in re.finditer(r"octubre de 2028", t):
-        print("BO", aviso, "|", t[max(0, m.start()-350):m.end()+150])
-    time.sleep(3)
-for n in range(8190, 8330):
-    try:
-        t = texto_pdf(f"https://www.bcra.gob.ar/Pdfs/comytexord/A{n}.pdf", 2)
-    except Exception as e:
-        print(f"A{n} error {e}"); continue
-    if t and "BOPREAL" in t.upper():
-        fecha = re.search(r"\d{2}/\d{2}/\d{4}", t)
-        k = t.upper().find("SERIE")
-        print(f"A{n}", fecha and fecha.group(0), "|", t[:120], "|", t[max(0, k-150):k+250] if k >= 0 else "")
-    time.sleep(0.7)
+"""Sondeo temporal: condiciones de emision (CNV) de 12 ON para cruzar con el sitio (no se mergea)."""
+import csv, gzip, json, os, sys
+sys.path.insert(0, ".")
+from cnv import almacen as alm
+T = "TTCAO YM44O YMCXO VSCXO YM34O MGCRO BF39O PNRCO BYY3O AERBO VSCMO BY34O".split()
+a = alm.almacen_desde_entorno()
+idx = json.loads(gzip.decompress(a.leer("cnv/indice/condiciones.json.gz")))
+ons = {r["ticker"]: r for r in csv.DictReader(open("data/ons.csv", encoding="utf-8"))}
+salida = {"ons": {t: idx["ons"].get(t) for t in T}, "filas": [f for f in idx["filas"] if f.get("ticker") in T], "emisiones": {}, "docs": {}}
+for t in T:
+    cuit = (ons.get(t) or {}).get("cuit")
+    if not cuit:
+        continue
+    venc = ons[t]["vence"]
+    crudo = a.leer(f"cnv/condiciones/{cuit}.json")
+    if crudo:
+        em = json.loads(crudo).get("emisiones") or []
+        salida["emisiones"][t] = [e for e in em if (e.get("fecha_vencimiento") or {}).get("valor", e.get("fecha_vencimiento")) == venc or t in json.dumps(e, ensure_ascii=False)]
+    docs = alm.leer_indice_empresa(a, cuit) or []
+    salida["docs"][t] = [{k: d.get(k) for k in ("id", "fecha", "seccion", "titulo", "url", "texto_ok")} for d in docs
+                         if any(x in (d.get("seccion") or "").lower() for x in ("resultado", "suplemento", "suscrip")) and (d.get("fecha") or "") >= "2019"][:60]
+os.makedirs("salida", exist_ok=True)
+json.dump(salida, open("salida/ons.json", "w"), ensure_ascii=False)
+print("SALIDA_JSON_GZ_B64")
+import base64
+print(base64.b64encode(gzip.compress(json.dumps(salida, ensure_ascii=False).encode())).decode())
+print("FIN_SALIDA")
